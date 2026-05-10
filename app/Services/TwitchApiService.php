@@ -16,6 +16,18 @@ class TwitchApiService
 
     private const TOKEN_URL = 'https://id.twitch.tv/oauth2/token';
 
+    private const CIRCUIT_BREAKER_KEY = 'twitch_api_circuit_open';
+
+    private const CIRCUIT_FAILURE_COUNT_KEY = 'twitch_api_failure_count';
+
+    private const CIRCUIT_FAILURE_THRESHOLD = 5;
+
+    private const CIRCUIT_OPEN_SECONDS = 60;
+
+    private const CONNECT_TIMEOUT_SECONDS = 3;
+
+    private const REQUEST_TIMEOUT_SECONDS = 15;
+
     public function getClientId(): ?string
     {
         return Setting::get('twitch_client_id', config('services.twitch.client_id'));
@@ -53,11 +65,14 @@ class TwitchApiService
 
     private function fetchAccessToken(): string
     {
-        $response = Http::asForm()->post(self::TOKEN_URL, [
-            'client_id' => $this->getClientId(),
-            'client_secret' => $this->getClientSecret(),
-            'grant_type' => 'client_credentials',
-        ]);
+        $response = Http::asForm()
+            ->connectTimeout(self::CONNECT_TIMEOUT_SECONDS)
+            ->timeout(self::REQUEST_TIMEOUT_SECONDS)
+            ->post(self::TOKEN_URL, [
+                'client_id' => $this->getClientId(),
+                'client_secret' => $this->getClientSecret(),
+                'grant_type' => 'client_credentials',
+            ]);
 
         if ($response->failed()) {
             throw new \RuntimeException('Failed to obtain Twitch access token: '.$response->body());
@@ -73,6 +88,8 @@ class TwitchApiService
     private function client(): PendingRequest
     {
         return Http::baseUrl(self::BASE_URL)
+            ->connectTimeout(self::CONNECT_TIMEOUT_SECONDS)
+            ->timeout(self::REQUEST_TIMEOUT_SECONDS)
             ->withHeaders([
                 'Client-ID' => $this->getClientId(),
                 'Authorization' => 'Bearer '.$this->getAccessToken(),
@@ -82,18 +99,45 @@ class TwitchApiService
 
     private function request(string $method, string $url, array $query = []): array
     {
+        if (Cache::has(self::CIRCUIT_BREAKER_KEY)) {
+            throw new \RuntimeException('Twitch API circuit breaker open — skipping request');
+        }
+
         try {
             $response = $this->client()->{$method}($url, $query);
+            $this->recordSuccess();
 
             return $response->json();
         } catch (\Illuminate\Http\Client\RequestException $e) {
             if ($e->response?->status() === 401) {
                 Cache::forget(self::TOKEN_CACHE_KEY);
                 $response = $this->client()->{$method}($url, $query);
+                $this->recordSuccess();
 
                 return $response->json();
             }
+            $this->recordFailure();
             throw $e;
+        } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            $this->recordFailure();
+            throw $e;
+        }
+    }
+
+    private function recordSuccess(): void
+    {
+        Cache::forget(self::CIRCUIT_FAILURE_COUNT_KEY);
+    }
+
+    private function recordFailure(): void
+    {
+        $count = (int) Cache::get(self::CIRCUIT_FAILURE_COUNT_KEY, 0) + 1;
+        Cache::put(self::CIRCUIT_FAILURE_COUNT_KEY, $count, self::CIRCUIT_OPEN_SECONDS);
+
+        if ($count >= self::CIRCUIT_FAILURE_THRESHOLD) {
+            Cache::put(self::CIRCUIT_BREAKER_KEY, true, self::CIRCUIT_OPEN_SECONDS);
+            Cache::forget(self::CIRCUIT_FAILURE_COUNT_KEY);
+            Log::warning('Twitch API circuit breaker opened after '.self::CIRCUIT_FAILURE_THRESHOLD.' consecutive failures, blocking requests for '.self::CIRCUIT_OPEN_SECONDS.'s');
         }
     }
 

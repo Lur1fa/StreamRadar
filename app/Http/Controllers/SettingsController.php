@@ -362,12 +362,15 @@ class SettingsController extends Controller
 
         $tags = implode(', ', ['English', $fake['game']]);
 
-        $body = "{$fake['user_name']} is live: {$fake['title']}\n"
+        $body = "{$fake['title']}\n"
             . "{$fake['game']} · ".number_format($fake['viewers'])." viewers\n"
-            . "Tags: {$tags}\n"
+            . "Tags: ".implode(', ', ['English', $fake['game']])."\n"
             . "Alert: {$fake['rule']} (test)";
 
-        $headers = ['Click' => "https://www.twitch.tv/{$fake['user_login']}"];
+        $headers = [
+            'Title' => '=?UTF-8?B?'.base64_encode("{$fake['user_name']} is live").'?=',
+            'Click' => "https://www.twitch.tv/{$fake['user_login']}",
+        ];
 
         if ($fake['avatar']) {
             $headers['Icon'] = $fake['avatar'];

@@ -297,12 +297,15 @@ class AlertService
 
             $tags = $s->tags ? implode(', ', $s->tags) : null;
 
-            $body = "{$s->user_name} is live: {$s->title}\n"
+            $body = "{$s->title}\n"
                 . "{$p['category']} · {$p['viewers']} viewers\n"
                 . ($tags ? "Tags: {$tags}\n" : '')
                 . "Alert: {$p['rules']}";
 
-            $headers = ['Click' => $p['url']];
+            $headers = [
+                'Title' => '=?UTF-8?B?'.base64_encode("{$s->user_name} is live").'?=',
+                'Click' => $p['url']
+            ];
 
             if ($p['thumbnail']) {
                 $headers['Attach'] = $p['thumbnail'] . '?t=' . time();

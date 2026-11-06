@@ -360,8 +360,11 @@ class SettingsController extends Controller
 
         $fake = $this->pickTestStream($twitch);
 
+        $tags = implode(', ', ['English', $fake['game']]);
+
         $body = "{$fake['user_name']} is live: {$fake['title']}\n"
             . "{$fake['game']} · ".number_format($fake['viewers'])." viewers · ".strtoupper($fake['language'])."\n"
+            . "Tags: {$tags}\n"
             . "Alert: {$fake['rule']} (test)";
 
         $headers = ['Click' => "https://www.twitch.tv/{$fake['user_login']}"];

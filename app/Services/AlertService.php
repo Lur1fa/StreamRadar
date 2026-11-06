@@ -295,14 +295,16 @@ class AlertService
             $p = $this->presentStream($entry);
             $s = $p['stream'];
 
+            $tags = $s->tags ? implode(', ', $s->tags) : null;
+
             $body = "{$s->user_name} is live: {$s->title}\n"
                 . "{$p['category']} · {$p['viewers']} viewers · {$p['language']}\n"
+                . ($tags ? "Tags: {$tags}\n" : '')
                 . "Alert: {$p['rules']}";
 
             $headers = ['Click' => $p['url']];
 
             if ($p['thumbnail']) {
-                // Twitch caches preview images, so a cache-buster keeps the picture current
                 $headers['Attach'] = $p['thumbnail'] . '?t=' . time();
                 $headers['Filename'] = 'preview.jpg';
             }

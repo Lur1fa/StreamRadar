@@ -291,38 +291,37 @@ class AlertService
             return;
         }
 
-        $payload = [];
         foreach ($this->groupByStream($webhookAlerts) as $entry) {
             $p = $this->presentStream($entry);
             $s = $p['stream'];
 
-            $payload[] = [
-                'event' => 'stream.alert',
-                'rules' => $entry['rules'],
-                'channel' => $s->user_name,
-                'channel_login' => $s->user_login,
-                'title' => $s->title,
-                'game' => $p['category'],
-                'viewers' => $s->viewer_count,
-                'language' => $s->language,
-                'url' => $p['url'],
-                'thumbnail' => $p['thumbnail'],
-                'avatar' => $p['avatar'],
-                'category_box_art' => $p['category_box_art'],
-                'started_at' => $s->started_at?->toIso8601String(),
-                'is_mature' => $s->is_mature,
-                'tags' => $s->tags,
-            ];
-        }
+            $tags = $s->tags ? implode(', ', $s->tags) : null;
 
-        try {
-            Http::post($webhookUrl, [
-                'event' => 'stream.alerts.batch',
-                'count' => count($payload),
-                'alerts' => $payload,
-            ]);
-        } catch (\Exception $e) {
-            Log::warning("Failed to send webhook alert: {$e->getMessage()}");
+            $body = "{$s->title}\n"
+                . "{$p['category']} · {$p['viewers']} viewers\n"
+                . ($tags ? "Tags: {$tags}\n" : '')
+                . "Alert: {$p['rules']}";
+
+            $headers = [
+                'Title' => '=?UTF-8?B?'.base64_encode("{$s->user_name} is live").'?=',
+                'Click' => $p['url']
+            ];
+
+            if ($p['thumbnail']) {
+                $headers['Attach'] = $p['thumbnail'] . '?t=' . time();
+                $headers['Filename'] = 'preview.jpg';
+            }
+            if ($p['avatar']) {
+                $headers['Icon'] = $p['avatar'];
+            }
+
+            try {
+                Http::withHeaders($headers)
+                    ->withBody($body, 'text/plain')
+                    ->post($webhookUrl);
+            } catch (\Exception $e) {
+                Log::warning("Failed to send webhook alert: {$e->getMessage()}");
+            }
         }
     }
 

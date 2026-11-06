@@ -363,7 +363,7 @@ class SettingsController extends Controller
         $tags = implode(', ', ['English', $fake['game']]);
 
         $body = "{$fake['user_name']} is live: {$fake['title']}\n"
-            . "{$fake['game']} · ".number_format($fake['viewers'])." viewers · ".strtoupper($fake['language'])."\n"
+            . "{$fake['game']} · ".number_format($fake['viewers'])." viewers\n"
             . "Tags: {$tags}\n"
             . "Alert: {$fake['rule']} (test)";
 

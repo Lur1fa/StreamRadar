@@ -298,7 +298,7 @@ class AlertService
             $tags = $s->tags ? implode(', ', $s->tags) : null;
 
             $body = "{$s->user_name} is live: {$s->title}\n"
-                . "{$p['category']} · {$p['viewers']} viewers · {$p['language']}\n"
+                . "{$p['category']} · {$p['viewers']} viewers\n"
                 . ($tags ? "Tags: {$tags}\n" : '')
                 . "Alert: {$p['rules']}";
 

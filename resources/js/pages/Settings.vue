@@ -546,7 +546,7 @@ onMounted(() => {
                         <input v-model="form.webhook_url" autocomplete="off" type="text" placeholder="https://ntfy.sh/your-topic or any URL..."
                             class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
                         <p class="mt-2 text-xs text-gray-400 dark:text-zinc-500">
-                            Receives POST with JSON payload for every alert. Works with ntfy.sh, Zapier, Make, or any custom endpoint.
+                            Receives a POST for every alert. Choose the payload format below: JSON works with Zapier, Make or any custom endpoint, ntfy sends a readable notification.
                         </p>
                     </div>
                     <div class="mt-3">

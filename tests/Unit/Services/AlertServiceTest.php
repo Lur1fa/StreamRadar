@@ -273,6 +273,38 @@ test('sendNotifications sends webhook when configured', function () {
     Http::assertSentCount(1);
 });
 
+test('sendNotifications sends JSON payload by default', function () {
+    Http::fake();
+    Setting::set('webhook_url', 'https://example.com/webhook');
+    $service = app(AlertService::class);
+
+    $rule = AlertRule::factory()->withWebhook()->create();
+    $stream = Stream::factory()->create();
+
+    $service->sendNotifications([['rule' => $rule, 'stream' => $stream]]);
+
+    Http::assertSent(fn ($request) => $request['event'] === 'stream.alerts.batch'
+        && $request['count'] === 1);
+});
+
+test('sendNotifications sends plain text with ntfy headers when format is ntfy', function () {
+    Http::fake();
+    Setting::set('webhook_url', 'https://ntfy.example.com/topic');
+    Setting::set('webhook_format', 'ntfy');
+    $service = app(AlertService::class);
+
+    $rule = AlertRule::factory()->withWebhook()->create();
+    $stream = Stream::factory()->create();
+
+    $service->sendNotifications([['rule' => $rule, 'stream' => $stream]]);
+
+    Http::assertSentCount(1);
+    Http::assertSent(fn ($request) => $request->hasHeader('Title')
+        && $request->header('Title')[0] === '=?UTF-8?B?'.base64_encode("{$stream->user_name} is live").'?='
+        && str_contains($request->header('Click')[0], 'twitch.tv')
+        && str_contains($request->body(), $stream->title));
+});
+
 test('sendNotifications does not send Discord when no rule has notify_discord', function () {
     Http::fake();
     Setting::set('discord_webhook_url', 'https://discord.com/api/webhooks/test');

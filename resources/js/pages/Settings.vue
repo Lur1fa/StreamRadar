@@ -30,6 +30,7 @@ const form = useForm({
     telegram_bot_token: props.settings.telegram_bot_token || '',
     telegram_chat_id: props.settings.telegram_chat_id || '',
     webhook_url: props.settings.webhook_url || '',
+    webhook_format: props.settings.webhook_format || 'json',
     notifications_email_enabled: props.settings.notifications_email_enabled !== '0',
     notifications_discord_enabled: props.settings.notifications_discord_enabled !== '0',
     notifications_telegram_enabled: props.settings.notifications_telegram_enabled !== '0',
@@ -547,6 +548,14 @@ onMounted(() => {
                         <p class="mt-2 text-xs text-gray-400 dark:text-zinc-500">
                             Receives POST with JSON payload for every alert. Works with ntfy.sh, Zapier, Make, or any custom endpoint.
                         </p>
+                    </div>
+                    <div class="mt-3">
+                        <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Payload format</label>
+                        <select v-model="form.webhook_format"
+                            class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500">
+                            <option value="json">JSON (Zapier, Make, custom endpoints)</option>
+                            <option value="ntfy">ntfy (plain text with title, click and image)</option>
+                        </select>
                     </div>
                     <div class="flex items-center gap-3 mt-4">
                         <button @click="testNotification('webhook')" :disabled="testingWebhook"

@@ -291,6 +291,51 @@ class AlertService
             return;
         }
 
+        if (Setting::get('webhook_format', 'json') === 'ntfy') {
+            $this->sendNtfyWebhook($webhookUrl, $webhookAlerts);
+        } else {
+            $this->sendJsonWebhook($webhookUrl, $webhookAlerts);
+        }
+    }
+
+    private function sendJsonWebhook(string $webhookUrl, array $webhookAlerts): void {
+        $payload = [];
+        foreach ($this->groupByStream($webhookAlerts) as $entry) {
+            $p = $this->presentStream($entry);
+            $s = $p['stream'];
+
+            $payload[] = [
+                'event' => 'stream.alert',
+                'rules' => $entry['rules'],
+                'channel' => $s->user_name,
+                'channel_login' => $s->user_login,
+                'title' => $s->title,
+                'game' => $p['category'],
+                'viewers' => $s->viewer_count,
+                'language' => $s->language,
+                'url' => $p['url'],
+                'thumbnail' => $p['thumbnail'],
+                'avatar' => $p['avatar'],
+                'category_box_art' => $p['category_box_art'],
+                'started_at' => $s->started_at?->toIso8601String(),
+                'is_mature' => $s->is_mature,
+                'tags' => $s->tags,
+            ];
+        }
+
+        try {
+            Http::post($webhookUrl, [
+                'event' => 'stream.alerts.batch',
+                'count' => count($payload),
+                'alerts' => $payload,
+            ]);
+        } catch (\Exception $e) {
+            Log::warning("Failed to send webhook alert: {$e->getMessage()}");
+        }
+    }
+
+    private function sendNtfyWebhook(string $webhookUrl, array $webhookAlerts): void
+    {
         foreach ($this->groupByStream($webhookAlerts) as $entry) {
             $p = $this->presentStream($entry);
             $s = $p['stream'];

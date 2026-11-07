@@ -41,6 +41,7 @@ class SettingsController extends Controller
         'telegram_bot_token',
         'telegram_chat_id',
         'webhook_url',
+        'webhook_format',
         'notifications_email_enabled',
         'notifications_discord_enabled',
         'notifications_telegram_enabled',
@@ -57,6 +58,7 @@ class SettingsController extends Controller
             'global_languages' => '[]',
             'global_keywords' => '[]',
             'theme' => 'system',
+            'webhook_format' => 'json',
         ]);
 
         // Mask secrets

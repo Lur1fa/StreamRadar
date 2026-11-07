@@ -21,8 +21,6 @@ chown www-data:www-data /app/database/database.sqlite
 
 # Fix storage permissions
 mkdir -p /app/storage/logs /app/storage/framework/{sessions,views,cache}
-chown -R www-data:www-data /app/storage /app/bootstrap/cache
-chmod -R 775 /app/storage
 
 # Run migrations
 php /app/artisan migrate --force --no-interaction
@@ -38,9 +36,12 @@ else
     php /app/artisan view:clear 2>/dev/null || true
 fi
 
+# Hand ownership to the web user
+chown -R www-data:www-data /app/storage /app/bootstrap/cache /app/database
+chmod -R ug+rwX /app/storage /app/bootstrap/cache
+
 echo ""
 echo "  StreamRadar is ready!"
-echo "  Open http://localhost:${APP_PORT:-8080} in your browser"
 echo ""
 
 exec "$@"

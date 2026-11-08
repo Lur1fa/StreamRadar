@@ -96,6 +96,11 @@ class SettingsController extends Controller
             unset($data['telegram_bot_token']);
         }
 
+        // Remove webhook format if not supported formats
+        if (isset($data['webhook_format']) && ! in_array($data['webhook_format'], ['json', 'ntfy'], true)) {
+            unset($data['webhook_format']);
+        }
+
         // Handle auth password separately (hash it)
         $authPassword = $request->input('auth_password');
         if ($authPassword) {
@@ -362,26 +367,41 @@ class SettingsController extends Controller
 
         $fake = $this->pickTestStream($twitch);
 
-        $tags = implode(', ', ['English', $fake['game']]);
-
-        $body = "{$fake['title']}\n"
-            . "{$fake['game']} · ".number_format($fake['viewers'])." viewers\n"
-            . "Tags: ".implode(', ', ['English', $fake['game']])."\n"
-            . "Alert: {$fake['rule']} (test)";
-
-        $headers = [
-            'Title' => '=?UTF-8?B?'.base64_encode("{$fake['user_name']} is live").'?=',
-            'Click' => "https://www.twitch.tv/{$fake['user_login']}",
-        ];
-
-        if ($fake['avatar']) {
-            $headers['Icon'] = $fake['avatar'];
-        }
-
         try {
-            $response = Http::withHeaders($headers)
-                ->withBody($body, 'text/plain')
-                ->post($webhookUrl);
+            if (Setting::get('webhook_format', 'json') === 'ntfy') {
+                $body = "{$fake['title']}\n"
+                    . "{$fake['game']} · ".number_format($fake['viewers'])." viewers\n"
+                    . "Tags: ".implode(', ', ['English', $fake['game']])."\n"
+                    . "Alert: {$fake['rule']} (test)";
+
+                $headers = [
+                    'Title' => '=?UTF-8?B?'.base64_encode("{$fake['user_name']} is live").'?=',
+                    'Click' => "https://www.twitch.tv/{$fake['user_login']}",
+                ];
+                if ($fake['avatar']) {
+                    $headers['Icon'] = $fake['avatar'];
+                }
+
+                $response = Http::withHeaders($headers)->withBody($body, 'text/plain')->post($webhookUrl);
+            } else {
+                $response = Http::post($webhookUrl, [
+                    'event' => 'stream.alert',
+                    'rule' => $fake['rule'].' (test)',
+                    'channel' => $fake['user_name'],
+                    'channel_login' => $fake['user_login'],
+                    'title' => $fake['title'],
+                    'game' => $fake['game'],
+                    'viewers' => $fake['viewers'],
+                    'language' => $fake['language'],
+                    'url' => "https://www.twitch.tv/{$fake['user_login']}",
+                    'thumbnail' => null,
+                    'avatar' => $fake['avatar'],
+                    'started_at' => now()->subMinutes(rand(5, 120))->toIso8601String(),
+                    'is_mature' => false,
+                    'tags' => ['English', $fake['game']],
+                    'is_test' => true,
+                ]);
+            }
 
             return response()->json(['success' => true, 'message' => "Webhook responded with HTTP {$response->status()}."]);
         } catch (\Exception $e) {

@@ -554,7 +554,7 @@ onMounted(() => {
                         <select v-model="form.webhook_format"
                             class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500">
                             <option value="json">JSON (Zapier, Make, custom endpoints)</option>
-                            <option value="ntfy">ntfy (plain text with title, click and image)</option>
+                            <option value="ntfy">ntfy (plain text with title, click action and image)</option>
                         </select>
                     </div>
                     <div class="flex items-center gap-3 mt-4">

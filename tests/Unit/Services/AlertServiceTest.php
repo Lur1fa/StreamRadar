@@ -233,6 +233,46 @@ test('sendNotifications sends Discord webhook when configured', function () {
     Http::assertSentCount(1);
 });
 
+test('sendNotifications uses the shared fallback format for Discord', function () {
+    Http::fake();
+    Setting::set('discord_webhook_url', 'https://discord.com/api/webhooks/test');
+    $service = app(AlertService::class);
+
+    $rule = AlertRule::factory()->withDiscord()->create(['name' => 'My rule']);
+    $stream = Stream::factory()->create([
+        'user_name' => 'Streamer',
+        'title' => 'Playing now',
+        'game_name' => 'Some Game',
+        'viewer_count' => 42,
+        'tags' => ['English', 'Ranked'],
+    ]);
+
+    $service->sendNotifications([['rule' => $rule, 'stream' => $stream]]);
+
+    Http::assertSent(fn ($request) => $request['embeds'][0]['description'] === "Playing now\nSome Game · 42 viewers\nTags: English, Ranked\nAlert: My rule");
+});
+
+test('sendNotifications renders a custom template for Discord', function () {
+    Http::fake();
+    Setting::set('discord_webhook_url', 'https://discord.com/api/webhooks/test');
+    $service = app(AlertService::class);
+
+    $rule = AlertRule::factory()->withDiscord()->create([
+        'notification_template' => [
+            'version' => 1,
+            'blocks' => [
+                ['type' => 'text', 'value' => 'LIVE: '],
+                ['type' => 'field', 'field' => 'title'],
+            ],
+        ],
+    ]);
+    $stream = Stream::factory()->create(['title' => 'Custom title']);
+
+    $service->sendNotifications([['rule' => $rule, 'stream' => $stream]]);
+
+    Http::assertSent(fn ($request) => $request['embeds'][0]['description'] === 'LIVE: Custom title');
+});
+
 test('sendNotifications sends email when configured', function () {
     Mail::fake();
     Setting::set('mail_to', 'test@example.com');
@@ -285,6 +325,25 @@ test('sendNotifications sends JSON payload by default', function () {
 
     Http::assertSent(fn ($request) => $request['event'] === 'stream.alerts.batch'
         && $request['count'] === 1);
+});
+
+test('JSON webhook ignores a custom notification template', function () {
+    Http::fake();
+    Setting::set('webhook_url', 'https://example.com/webhook');
+    $service = app(AlertService::class);
+
+    $rule = AlertRule::factory()->withWebhook()->create([
+        'notification_template' => [
+            'version' => 1,
+            'blocks' => [['type' => 'text', 'value' => 'Do not include this']],
+        ],
+    ]);
+    $stream = Stream::factory()->create();
+
+    $service->sendNotifications([['rule' => $rule, 'stream' => $stream]]);
+
+    Http::assertSent(fn ($request) => $request['event'] === 'stream.alerts.batch'
+        && ! str_contains($request->body(), 'Do not include this'));
 });
 
 test('sendNotifications sends plain text with ntfy headers when format is ntfy', function () {

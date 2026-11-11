@@ -4,7 +4,8 @@ import { router, useForm } from '@inertiajs/vue3';
 import { Plus, Bell, Trash2, CheckCircle, XCircle, X, AlertTriangle, Pencil, ChevronDown } from 'lucide-vue-next';
 import AppLayout from '@/layouts/AppLayout.vue';
 import ConfirmModal from '@/components/ConfirmModal.vue';
-import type { AlertRule, Category } from '@/types';
+import AlertTemplateBuilder from '@/components/AlertTemplateBuilder.vue';
+import type { AlertRule, Category, AlertNotificationTemplate } from '@/types';
 
 const props = defineProps<{ alertRules: AlertRule[]; categories: Category[]; emailConfigured: boolean; discordConfigured: boolean; telegramConfigured: boolean; webhookConfigured: boolean }>();
 
@@ -29,6 +30,7 @@ const form = useForm({
     notify_webhook: props.webhookConfigured,
     notify_on_category_change: false,
     notify_on_stream_start: true,
+    notification_template: null as AlertNotificationTemplate | null,
 });
 
 const availableTags = computed(() => {
@@ -78,6 +80,7 @@ const editForm = useForm({
     notify_email: true, notify_discord: true, notify_telegram: true, notify_webhook: false,
     notify_on_category_change: false,
     notify_on_stream_start: true,
+    notification_template: null as AlertNotificationTemplate | null,
 });
 const editKwInput = ref('');
 function addEditKw() { const v = editKwInput.value.trim(); if (v && !editForm.keywords.includes(v)) editForm.keywords.push(v); editKwInput.value = ''; }
@@ -100,6 +103,7 @@ function startEdit(rule: AlertRule) {
     editForm.notify_on_category_change = rule.notify_on_category_change;
     editForm.notify_on_stream_start = rule.notify_on_stream_start;
     editForm.category_tags = rule.category_tags || [];
+    editForm.notification_template = rule.notification_template ? { version: 1, blocks: [...rule.notification_template.blocks] } : null;
     editChannelMode.value = rule.streamer_login ? 'specific' : 'anyone';
     editCategoryMode.value = rule.category_tags?.length ? 'tagged' : (rule.category_ids?.length || rule.category_id) ? 'specific' : 'any';
     editShowFilters.value = !!(rule.min_viewers || rule.min_avg_viewers || rule.language || rule.keywords?.length);
@@ -280,6 +284,8 @@ function unconfiguredWarnings(f: { notify_email: boolean; notify_discord: boolea
                             class="flex-1 px-3 py-1.5 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white border border-gray-200 dark:border-zinc-700 outline-none placeholder:text-gray-400 dark:placeholder:text-zinc-500" />
                     </div>
 
+                    <AlertTemplateBuilder v-model="form.notification_template" />
+
                     <!-- Warnings -->
                     <div v-if="unconfiguredWarnings(form).length" class="space-y-1.5">
                         <div v-for="w in unconfiguredWarnings(form)" :key="w" class="flex items-center gap-2 px-3 py-2 text-xs font-medium bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-400 rounded-lg">
@@ -459,6 +465,8 @@ function unconfiguredWarnings(f: { notify_email: boolean; notify_discord: boolea
                         <input v-model="editForm.name" type="text"
                             class="flex-1 px-3 py-1.5 text-sm rounded-lg bg-white dark:bg-zinc-800 text-gray-900 dark:text-white border border-gray-200 dark:border-zinc-700 outline-none" />
                     </div>
+
+                    <AlertTemplateBuilder v-model="editForm.notification_template" />
 
                     <div v-if="unconfiguredWarnings(editForm).length" class="space-y-1.5">
                         <div v-for="w in unconfiguredWarnings(editForm)" :key="w" class="flex items-center gap-2 px-3 py-2 text-xs font-medium bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-400 rounded-lg">

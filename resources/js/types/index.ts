@@ -67,8 +67,20 @@ export interface AlertRule {
     notify_webhook: boolean;
     notify_on_category_change: boolean;
     notify_on_stream_start: boolean;
+    notification_template: AlertNotificationTemplate | null;
     is_active: boolean;
     created_at: string;
+}
+
+export type AlertTemplateBlock =
+    | { type: 'field'; field: AlertTemplateField }
+    | { type: 'text'; value: string };
+
+export type AlertTemplateField = 'streamer_name' | 'streamer_login' | 'title' | 'category' | 'viewers' | 'language' | 'url' | 'alert_names' | 'tags' | 'started_at';
+
+export interface AlertNotificationTemplate {
+    version: 1;
+    blocks: AlertTemplateBlock[];
 }
 
 export interface IgnoredStreamer {

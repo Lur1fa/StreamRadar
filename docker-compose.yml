@@ -2,15 +2,15 @@ services:
   streamradar:
     build: .
     ports:
-      - "${APP_PORT:-8080}:80"
+      - "80:80"
     volumes:
-      - ./database:/app/database
+      - ./database:/app/database:z
       - ./.git/refs:/app/.git-refs:ro
       - ./.git/HEAD:/app/.git-head:ro
     environment:
       - APP_ENV=production
       - APP_DEBUG=false
-      - APP_URL=http://localhost:${APP_PORT:-8080}
+      - APP_URL=http://localhost:8080
       - MAIL_MAILER=smtp
       - MAIL_HOST=mailpit
       - MAIL_PORT=1025

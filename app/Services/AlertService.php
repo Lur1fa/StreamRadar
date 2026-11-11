@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Mail;
 
 class AlertService
 {
+    public function __construct(private AlertTemplateRenderer $templateRenderer) {}
     /**
      * @param  bool  $silent  If true, records tracking but does not trigger notifications (used for initial sync)
      * @return array<array{rule: AlertRule, stream: Stream}>
@@ -138,9 +139,11 @@ class AlertService
     {
         $grouped = [];
         foreach ($alerts as $alert) {
-            $key = $alert['stream']->twitch_id;
+            // Keep alerts with different templates separate while retaining the
+            // existing batching behavior for rules using the same template.
+            $key = $alert['stream']->twitch_id.'|'.md5(json_encode($alert['rule']->notification_template));
             if (! isset($grouped[$key])) {
-                $grouped[$key] = ['stream' => $alert['stream'], 'rules' => []];
+                $grouped[$key] = ['stream' => $alert['stream'], 'rules' => [], 'template' => $alert['rule']->notification_template];
             }
             $grouped[$key]['rules'][] = $alert['rule']->name;
         }
@@ -168,6 +171,7 @@ class AlertService
             'avatar' => $stream->profile_image_url,
             'thumbnail' => $stream->getThumbnailUrlSized(440, 248),
             'category_box_art' => $categoryBoxArt,
+            'template' => $entry['template'],
         ];
     }
 
@@ -190,21 +194,17 @@ class AlertService
             $p = $this->presentStream($entry);
 
             $embed = [
-                'title' => $p['stream']->title,
+                'title' => "{$p['stream']->user_name} is live",
                 'url' => $p['url'],
                 'color' => 0x9147ff,
                 'author' => [
-                    'name' => "{$p['stream']->user_name} is live!",
+                    'name' => "{$p['stream']->user_name} is live",
                     'url' => $p['url'],
                 ],
-                'fields' => [
-                    ['name' => 'Category', 'value' => $p['category'], 'inline' => true],
-                    ['name' => 'Viewers', 'value' => $p['viewers'], 'inline' => true],
-                    ['name' => 'Language', 'value' => $p['language'], 'inline' => true],
-                ],
-                'footer' => ['text' => "Alert: {$p['rules']}"],
                 'timestamp' => now()->toIso8601String(),
             ];
+
+            $embed['description'] = $this->templateRenderer->render($p['template'], $p['stream'], $entry, 'discord');
 
             if ($p['avatar']) {
                 $embed['author']['icon_url'] = $p['avatar'];
@@ -250,10 +250,8 @@ class AlertService
             $p = $this->presentStream($entry);
             $s = $p['stream'];
 
-            $caption = "<b>{$s->user_name}</b> is live!\n"
-                ."<a href=\"{$p['url']}\">{$s->title}</a>\n\n"
-                ."🎮 {$p['category']}  ·  👁 {$p['viewers']}  ·  🌐 {$p['language']}\n"
-                ."📋 Alert: {$p['rules']}";
+            $caption = '<b>'.htmlspecialchars("{$s->user_name} is live", ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')."</b>\n"
+                .$this->templateRenderer->render($p['template'], $s, $entry, 'telegram');
 
             try {
                 if ($p['thumbnail']) {
@@ -340,12 +338,7 @@ class AlertService
             $p = $this->presentStream($entry);
             $s = $p['stream'];
 
-            $tags = $s->tags ? implode(', ', $s->tags) : null;
-
-            $body = "{$s->title}\n"
-                . "{$p['category']} · {$p['viewers']} viewers\n"
-                . ($tags ? "Tags: {$tags}\n" : '')
-                . "Alert: {$p['rules']}";
+            $body = $this->templateRenderer->render($p['template'], $s, $entry);
 
             $headers = [
                 'Title' => '=?UTF-8?B?'.base64_encode("{$s->user_name} is live").'?=',

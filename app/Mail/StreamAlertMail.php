@@ -4,6 +4,7 @@ namespace App\Mail;
 
 use App\Models\AlertRule;
 use App\Models\Stream;
+use App\Services\AlertTemplateRenderer;
 use Illuminate\Bus\Queueable;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
@@ -48,9 +49,9 @@ class StreamAlertMail extends Mailable
     {
         $grouped = [];
         foreach ($this->alerts as $alert) {
-            $key = $alert['stream']->twitch_id;
+            $key = $alert['stream']->twitch_id.'|'.md5(json_encode($alert['rule']->notification_template));
             if (! isset($grouped[$key])) {
-                $grouped[$key] = ['stream' => $alert['stream'], 'rules' => []];
+                $grouped[$key] = ['stream' => $alert['stream'], 'rules' => [], 'template' => $alert['rule']->notification_template];
             }
             $grouped[$key]['rules'][] = $alert['rule']->name;
         }
@@ -100,6 +101,8 @@ class StreamAlertMail extends Mailable
             $thumbnailHtml = $thumbnail
                 ? "<a href=\"{$url}\" style=\"display: block; margin-bottom: 12px;\"><img src=\"{$thumbnail}\" width=\"100%\" style=\"border-radius: 8px; display: block;\" alt=\"Stream preview\" /></a>"
                 : '';
+            $message = app(AlertTemplateRenderer::class)->render($entry['template'], $stream, $entry, 'html');
+            $customMessageHtml = '<div style="white-space: pre-wrap; margin: 0 0 12px; color: #374151; font-size: 14px;">'.$message.'</div>';
 
             $html .= <<<HTML
             <div style="background: white; border-radius: 12px; overflow: hidden; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
@@ -108,13 +111,14 @@ class StreamAlertMail extends Mailable
                         <td>{$avatarHtml}</td>
                         <td>
                             <div style="color: white; font-weight: 700; font-size: 16px;">{$stream->user_name}</div>
-                            <div style="color: rgba(255,255,255,0.8); font-size: 12px;">is live on Twitch</div>
+                            <div style="color: rgba(255,255,255,0.8); font-size: 12px;">is live</div>
                         </td>
                     </tr></table>
                 </div>
                 <div style="padding: 16px;">
                     <p style="margin: 0 0 12px; font-size: 15px; font-weight: 600; color: #111827;">{$stream->title}</p>
                     {$thumbnailHtml}
+                    {$customMessageHtml}
                     <table cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 12px;">
                         <tr>
                             <td style="padding-right: 16px;">

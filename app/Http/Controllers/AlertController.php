@@ -8,6 +8,7 @@ use App\Models\Setting;
 use App\Models\TrackedChannel;
 use App\Services\AlertService;
 use App\Services\TwitchApiService;
+use App\Services\AlertTemplateValidator;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -50,9 +51,11 @@ class AlertController extends Controller
             'notify_webhook' => 'boolean',
             'notify_on_category_change' => 'boolean',
             'notify_on_stream_start' => 'boolean',
+            'notification_template' => 'nullable|array',
         ]);
 
         $validated['match_mode'] = 'always';
+        $validated['notification_template'] = app(AlertTemplateValidator::class)->validate($validated['notification_template'] ?? null);
 
         if (! empty($validated['streamer_login'])) {
             $validated['streamer_login'] = strtolower($validated['streamer_login']);
@@ -85,11 +88,16 @@ class AlertController extends Controller
             'notify_telegram' => 'sometimes|boolean',
             'notify_webhook' => 'sometimes|boolean',
             'notify_on_category_change' => 'sometimes|boolean',
+            'notification_template' => 'sometimes|nullable|array',
         ]);
 
         if (! empty($validated['streamer_login'])) {
             $validated['streamer_login'] = strtolower($validated['streamer_login']);
             $this->ensureChannelTracked($validated['streamer_login'], app(TwitchApiService::class));
+        }
+
+        if (array_key_exists('notification_template', $validated)) {
+            $validated['notification_template'] = app(AlertTemplateValidator::class)->validate($validated['notification_template']);
         }
 
         $alert->update($validated);

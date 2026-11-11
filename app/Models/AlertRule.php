@@ -27,6 +27,7 @@ class AlertRule extends Model
         'notify_webhook',
         'notify_on_category_change',
         'notify_on_stream_start',
+        'notification_template',
         'is_active',
     ];
 
@@ -45,6 +46,7 @@ class AlertRule extends Model
             'notify_on_category_change' => 'boolean',
             'notify_on_stream_start' => 'boolean',
             'is_active' => 'boolean',
+            'notification_template' => 'array',
         ];
     }
 

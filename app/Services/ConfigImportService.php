@@ -9,6 +9,7 @@ use App\Models\Category;
 use App\Models\Setting;
 use App\Models\TagFilter;
 use App\Models\TrackedChannel;
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
@@ -30,42 +31,49 @@ class ConfigImportService
      *
      * @throws ValidationException
      */
-    public function import(array $data): array
+    /**
+     * Import into one account. Tracking, blacklist and alerts become that
+     * account's own; installation settings in the file are applied only when
+     * the account is an administrator.
+     */
+    public function import(array $data, User $owner): array
     {
         $validated = $this->validate($data);
 
-        return DB::transaction(function () use ($validated) {
+        return DB::transaction(function () use ($validated, $owner) {
             $counts = ['settings' => 0, 'categories' => 0, 'channels' => 0, 'blacklist' => 0, 'tag_filters' => 0, 'alerts' => 0];
 
-            foreach (UpdateSettingsRequest::normalize($validated['settings'] ?? []) as $key => $value) {
-                Setting::set($key, $value);
-                $counts['settings']++;
-            }
+            $settings = array_intersect_key(
+                UpdateSettingsRequest::normalize($validated['settings'] ?? []),
+                array_flip(UpdateSettingsRequest::writableKeys($owner)),
+            );
+            Setting::storeFor($owner, $settings);
+            $counts['settings'] = count($settings);
 
             foreach ($validated['categories'] ?? [] as $cat) {
-                Category::updateOrCreate(['twitch_id' => $cat['twitch_id']], collect($cat)->except('twitch_id')->toArray());
+                Category::updateOrCreateFor($owner, ['twitch_id' => $cat['twitch_id']], collect($cat)->except('twitch_id')->toArray());
                 $counts['categories']++;
             }
 
             foreach ($validated['channels'] ?? [] as $ch) {
                 $ch['user_login'] = strtolower($ch['user_login']);
-                TrackedChannel::updateOrCreate(['twitch_user_id' => $ch['twitch_user_id']], collect($ch)->except('twitch_user_id')->toArray());
+                TrackedChannel::updateOrCreateFor($owner, ['twitch_user_id' => $ch['twitch_user_id']], collect($ch)->except('twitch_user_id')->toArray());
                 $counts['channels']++;
             }
 
             foreach ($validated['blacklist'] ?? [] as $rule) {
                 $value = $rule['type'] === 'channel' ? strtolower($rule['value']) : $rule['value'];
-                BlacklistRule::updateOrCreate(['type' => $rule['type'], 'value' => $value], collect($rule)->except(['type', 'value'])->toArray());
+                BlacklistRule::updateOrCreateFor($owner, ['type' => $rule['type'], 'value' => $value], collect($rule)->except(['type', 'value'])->toArray());
                 $counts['blacklist']++;
             }
 
             foreach ($validated['tag_filters'] ?? [] as $tf) {
-                TagFilter::updateOrCreate(['tag' => $tf['tag']], collect($tf)->except('tag')->toArray());
+                TagFilter::updateOrCreateFor($owner, ['tag' => $tf['tag']], collect($tf)->except('tag')->toArray());
                 $counts['tag_filters']++;
             }
 
             if (! empty($validated['alerts'])) {
-                $twitchToId = Category::pluck('id', 'twitch_id')->toArray();
+                $twitchToId = Category::ownedBy($owner)->pluck('id', 'twitch_id')->toArray();
 
                 foreach ($validated['alerts'] as $alert) {
                     $data = collect($alert)->except(['name', 'category_twitch_id', 'category_twitch_ids'])->toArray();
@@ -79,7 +87,7 @@ class ConfigImportService
                         $data['streamer_login'] = strtolower($data['streamer_login']);
                     }
 
-                    AlertRule::updateOrCreate(['name' => $alert['name']], $data);
+                    AlertRule::updateOrCreateFor($owner, ['name' => $alert['name']], $data);
                     $counts['alerts']++;
                 }
             }

@@ -3,6 +3,7 @@
 namespace App\Support;
 
 use App\Models\Setting;
+use App\Models\UserSetting;
 use Throwable;
 
 /**
@@ -111,6 +112,13 @@ final class Redactor
             foreach (Setting::SECRET_KEYS as $key) {
                 $v = Setting::get($key);
                 if (is_string($v) && strlen($v) >= 6) {
+                    $values[] = $v;
+                }
+            }
+
+            // Destinations every account stores for its own alerts.
+            foreach (UserSetting::secretValues() as $v) {
+                if (strlen($v) >= 6) {
                     $values[] = $v;
                 }
             }

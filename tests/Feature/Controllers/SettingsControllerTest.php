@@ -33,7 +33,7 @@ test('GET /settings exposes only a mask and a flag for secrets', function () {
 test('PUT /settings saves settings', function () {
     $this->put('/settings', ['theme' => 'dark'])->assertRedirect();
 
-    expect(Setting::get('theme'))->toBe('dark');
+    expect(getAccountSetting('theme'))->toBe('dark');
 });
 
 test('PUT /settings normalises booleans and validates numbers', function () {
@@ -61,11 +61,11 @@ test('PUT /settings does not overwrite a secret with its mask or an empty value'
 });
 
 test('PUT /settings can explicitly clear a secret', function () {
-    Setting::set('telegram_bot_token', '123456:ABCDEFghijklmnopqrstuvwxyz');
+    setAccountSetting('telegram_bot_token', '123456:ABCDEFghijklmnopqrstuvwxyz');
 
     $this->put('/settings', ['clear_secrets' => ['telegram_bot_token']])->assertRedirect();
 
-    expect(Setting::get('telegram_bot_token'))->toBeNull();
+    expect(getAccountSetting('telegram_bot_token'))->toBeNull();
 });
 
 test('PUT /settings rejects an invalid Telegram token or chat id format', function () {
@@ -86,7 +86,7 @@ test('GET /settings/export returns JSON with data', function () {
     Category::factory()->create();
     TrackedChannel::factory()->create();
     BlacklistRule::factory()->create();
-    Setting::set('theme', 'dark');
+    setAccountSetting('theme', 'dark');
 
     $response = $this->get('/settings/export')->assertOk();
     $data = $response->json();
@@ -107,7 +107,7 @@ test('POST /settings/import imports from JSON file', function () {
 
     $this->post('/settings/import', ['file' => $file])->assertRedirect()->assertSessionHas('success');
 
-    expect(Setting::get('theme'))->toBe('light');
+    expect(getAccountSetting('theme'))->toBe('light');
     $this->assertDatabaseHas('categories', ['twitch_id' => '123']);
 });
 
@@ -146,7 +146,7 @@ test('POST /settings/test-twitch calls testConnection', function () {
 
 test('POST /settings/test-discord sends webhook', function () {
     Http::fake(['discord.com/*' => Http::response(null, 204)]);
-    Setting::set('discord_webhook_url', 'https://discord.com/api/webhooks/123/token');
+    setAccountSetting('discord_webhook_url', 'https://discord.com/api/webhooks/123/token');
 
     $this->mock(TwitchApiService::class, function ($mock) {
         $mock->shouldReceive('isConfigured')->andReturn(false);
@@ -159,7 +159,7 @@ test('POST /settings/test-discord sends webhook', function () {
 
 test('POST /settings/test-email sends test email', function () {
     Mail::fake();
-    Setting::set('mail_to', 'test@example.com');
+    setAccountSetting('mail_to', 'test@example.com');
 
     $this->mock(TwitchApiService::class, function ($mock) {
         $mock->shouldReceive('isConfigured')->andReturn(false);

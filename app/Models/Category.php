@@ -2,13 +2,14 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToOwner;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Category extends Model
 {
-    use HasFactory;
+    use BelongsToOwner, HasFactory;
     protected $fillable = [
         'twitch_id',
         'name',
@@ -54,7 +55,7 @@ class Category extends Model
 
         if (str_starts_with($source, 'tag:')) {
             $tag = substr($source, 4);
-            $tagFilter = TagFilter::where('tag', $tag)->first();
+            $tagFilter = TagFilter::ownedBy((int) $this->owner_id)->where('tag', $tag)->first();
             if ($tagFilter) {
                 return [
                     'min_viewers' => $tagFilter->min_viewers,
@@ -74,12 +75,14 @@ class Category extends Model
             ];
         }
 
-        // Global (default)
+        // The account's own default filters
+        $defaults = UserSetting::getMany((int) $this->owner_id, ['global_min_viewers', 'global_min_avg_viewers', 'global_languages', 'global_keywords']);
+
         return [
-            'min_viewers' => (int) Setting::get('global_min_viewers', 0) ?: null,
-            'min_avg_viewers' => (int) Setting::get('global_min_avg_viewers', 0) ?: null,
-            'languages' => Setting::get('global_languages') ? json_decode(Setting::get('global_languages'), true) : [],
-            'keywords' => Setting::get('global_keywords') ? json_decode(Setting::get('global_keywords'), true) : [],
+            'min_viewers' => (int) $defaults['global_min_viewers'] ?: null,
+            'min_avg_viewers' => (int) $defaults['global_min_avg_viewers'] ?: null,
+            'languages' => $defaults['global_languages'] ? (json_decode($defaults['global_languages'], true) ?: []) : [],
+            'keywords' => $defaults['global_keywords'] ? (json_decode($defaults['global_keywords'], true) ?: []) : [],
         ];
     }
 

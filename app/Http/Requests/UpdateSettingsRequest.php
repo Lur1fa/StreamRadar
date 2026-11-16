@@ -3,18 +3,36 @@
 namespace App\Http\Requests;
 
 use App\Models\Setting;
+use App\Models\User;
 use App\Rules\SafeWebhookUrl;
 use Illuminate\Foundation\Http\FormRequest;
 
 /**
  * Single source of validation rules for managed settings, shared by the
  * Settings page (update) and the configuration import.
+ *
+ * Every account may write its own settings (Setting::ACCOUNT_KEYS). The
+ * installation's settings (Setting::SERVER_KEYS) are only accepted from
+ * administrators; from anyone else they are dropped before validation, so
+ * they can neither be changed nor probed.
  */
 class UpdateSettingsRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user()?->isAdmin() ?? false;
+        return $this->user() !== null;
+    }
+
+    /**
+     * @return string[]
+     */
+    public static function writableKeys(?User $user): array
+    {
+        if ($user === null) {
+            return [];
+        }
+
+        return $user->isAdmin() ? Setting::MANAGED_KEYS : Setting::ACCOUNT_KEYS;
     }
 
     public function rules(): array
@@ -71,8 +89,10 @@ class UpdateSettingsRequest extends FormRequest
      */
     protected function prepareForValidation(): void
     {
+        $writable = self::writableKeys($this->user());
+
         $clean = [];
-        foreach (Setting::MANAGED_KEYS as $key) {
+        foreach ($writable as $key) {
             if (! $this->has($key)) {
                 continue;
             }
@@ -83,7 +103,7 @@ class UpdateSettingsRequest extends FormRequest
             $clean[$key] = $value;
         }
 
-        $this->replace($clean + ['clear_secrets' => array_values(array_intersect((array) $this->input('clear_secrets', []), Setting::SECRET_KEYS))]);
+        $this->replace($clean + ['clear_secrets' => array_values(array_intersect((array) $this->input('clear_secrets', []), Setting::SECRET_KEYS, $writable))]);
     }
 
     public static function looksMasked(mixed $value): bool

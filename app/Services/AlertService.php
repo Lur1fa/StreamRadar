@@ -8,6 +8,7 @@ use App\Models\HistoryEvent;
 use App\Models\Setting;
 use App\Models\Stream;
 use App\Models\StreamAlertTracking;
+use App\Models\UserSetting;
 use App\Services\Http\SafeHttpClient;
 use App\Support\ImageUrl;
 use App\Support\Redactor;
@@ -29,7 +30,8 @@ class AlertService
     public function checkAlerts(Stream $stream, ?Stream $oldStream, bool $silent = false): array
     {
         $triggeredAlerts = [];
-        $rules = AlertRule::where('is_active', true)->get();
+        // Only the rules of the account this stream row belongs to.
+        $rules = AlertRule::ownedBy((int) $stream->owner_id)->where('is_active', true)->get();
 
         foreach ($rules as $rule) {
             if (! $rule->matchesStream($stream)) {
@@ -84,7 +86,7 @@ class AlertService
             $ruleNames = array_map(fn ($a) => $a['rule']->name, $triggeredAlerts);
             $ruleIds = array_map(fn ($a) => $a['rule']->id, $triggeredAlerts);
 
-            HistoryEvent::create([
+            HistoryEvent::createFor((int) $stream->owner_id, [
                 'type' => 'alert_triggered',
                 'stream_twitch_id' => $stream->twitch_id,
                 'streamer_login' => $stream->user_login,
@@ -102,7 +104,7 @@ class AlertService
 
     public function seedTrackingForRule(AlertRule $rule): void
     {
-        $streams = Stream::all();
+        $streams = Stream::ownedBy((int) $rule->owner_id)->get();
 
         foreach ($streams as $stream) {
             if (! $rule->matchesStream($stream)) {
@@ -117,34 +119,42 @@ class AlertService
     }
 
     /**
-     * Fan out to every enabled channel. Each channel is isolated: a failure
-     * (network error, bad template, misconfiguration) is logged and never
-     * propagates to the caller, so a scheduled sync always completes.
+     * Deliver triggered alerts to the destinations of the account each rule
+     * belongs to, on every channel that account has enabled. Each account and
+     * each channel is isolated: a failure (network error, bad template,
+     * misconfiguration) is logged and never propagates to the caller, so a
+     * scheduled sync always completes and one account cannot hold up another.
      *
      * @param  array<array{rule: AlertRule, stream: Stream}>  $allTriggered
      */
     public function sendNotifications(array $allTriggered): void
     {
-        if (empty($allTriggered)) {
-            return;
+        $byOwner = [];
+        foreach ($allTriggered as $alert) {
+            $ownerId = $alert['rule']->owner_id;
+            if ($ownerId !== null) {
+                $byOwner[(int) $ownerId][] = $alert;
+            }
         }
 
-        $channels = [
-            'email' => fn () => $this->sendEmailAlerts($allTriggered),
-            'discord' => fn () => $this->sendDiscordAlerts($allTriggered),
-            'telegram' => fn () => $this->sendTelegramAlerts($allTriggered),
-            'webhook' => fn () => $this->sendWebhookAlerts($allTriggered),
-        ];
+        foreach ($byOwner as $ownerId => $alerts) {
+            $channels = [
+                'email' => fn () => $this->sendEmailAlerts($ownerId, $alerts),
+                'discord' => fn () => $this->sendDiscordAlerts($ownerId, $alerts),
+                'telegram' => fn () => $this->sendTelegramAlerts($ownerId, $alerts),
+                'webhook' => fn () => $this->sendWebhookAlerts($ownerId, $alerts),
+            ];
 
-        foreach ($channels as $name => $send) {
-            if (Setting::get("notifications_{$name}_enabled", '1') === '0') {
-                continue;
-            }
+            foreach ($channels as $name => $send) {
+                try {
+                    if (UserSetting::get($ownerId, "notifications_{$name}_enabled", '1') === '0') {
+                        continue;
+                    }
 
-            try {
-                $send();
-            } catch (Throwable $e) {
-                $this->logFailure("Failed to send {$name} alerts", $e);
+                    $send();
+                } catch (Throwable $e) {
+                    $this->logFailure("Failed to send {$name} alerts", $e);
+                }
             }
         }
     }
@@ -212,9 +222,9 @@ class AlertService
 
     // ── Discord ──────────────────────────────────────────────────────────
 
-    private function sendDiscordAlerts(array $alerts): void
+    private function sendDiscordAlerts(int $ownerId, array $alerts): void
     {
-        $webhookUrl = Setting::get('discord_webhook_url');
+        $webhookUrl = UserSetting::get($ownerId, 'discord_webhook_url');
         if (! $webhookUrl) {
             return;
         }
@@ -277,10 +287,10 @@ class AlertService
 
     // ── Telegram ─────────────────────────────────────────────────────────
 
-    private function sendTelegramAlerts(array $alerts): void
+    private function sendTelegramAlerts(int $ownerId, array $alerts): void
     {
-        $token = Setting::get('telegram_bot_token');
-        $chatId = Setting::get('telegram_chat_id');
+        $token = UserSetting::get($ownerId, 'telegram_bot_token');
+        $chatId = UserSetting::get($ownerId, 'telegram_chat_id');
         if (! $token || ! $chatId) {
             return;
         }
@@ -325,9 +335,9 @@ class AlertService
 
     // ── Webhook ──────────────────────────────────────────────────────────
 
-    private function sendWebhookAlerts(array $alerts): void
+    private function sendWebhookAlerts(int $ownerId, array $alerts): void
     {
-        $webhookUrl = Setting::get('webhook_url');
+        $webhookUrl = UserSetting::get($ownerId, 'webhook_url');
         if (! $webhookUrl) {
             return;
         }
@@ -337,7 +347,7 @@ class AlertService
             return;
         }
 
-        if (Setting::get('webhook_format', 'json') === 'ntfy') {
+        if (UserSetting::get($ownerId, 'webhook_format', 'json') === 'ntfy') {
             $this->sendNtfyWebhook($webhookUrl, $webhookAlerts);
         } else {
             $this->sendJsonWebhook($webhookUrl, $webhookAlerts);
@@ -415,9 +425,13 @@ class AlertService
 
     // ── Email ────────────────────────────────────────────────────────────
 
-    private function sendEmailAlerts(array $alerts): void
+    /**
+     * The recipient is the account's own; the SMTP server is the
+     * installation's, set by an administrator.
+     */
+    private function sendEmailAlerts(int $ownerId, array $alerts): void
     {
-        $recipient = Setting::get('mail_to');
+        $recipient = UserSetting::get($ownerId, 'mail_to');
         if (! $recipient) {
             return;
         }

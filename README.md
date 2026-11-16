@@ -208,8 +208,20 @@ Authentication is always required — there is no open mode and no default passw
 
 **Accounts and roles.** Each person has their own account with one of two roles:
 
-- **admin** — full control: settings, user management, tracking, alerts, blacklist, manual sync.
-- **user** — read-only: dashboard, alerts, history.
+- **user** — their own streams, tracking, alerts, blacklist and history, their own default filters, and their own alert destinations (e-mail address, Discord webhook, Telegram, webhook).
+- **admin** — the same for their own account, plus the installation: Twitch API keys, scanning, SMTP server, backup, and user management.
+
+**Each account has its own data.** Tracked categories and channels, alerts, blacklist, history and the stream list belong to the account that created them; no account sees or changes another account's. Alerts are delivered to the destinations of the account that owns the alert. Twitch is still asked only once per category on each scan, however many accounts track it. Deleting an account deletes its data.
+
+Because every account can add tracked categories and outbound alert destinations, only give accounts to people you trust with that: each tracked category costs Twitch API requests, e-mails go out through your SMTP server, and webhooks can reach the hosts listed in `WEBHOOK_ALLOWED_HOSTS`.
+
+**Upgrading from a version with shared data.** Everything that existed goes to the oldest administrator account; other accounts start empty. If you use a different account day to day (for example one created by single sign-on), move the data to it:
+
+```bash
+php artisan user:move-data old-admin@example.com you@example.com
+```
+
+The command lists what it will move and asks before doing it. It refuses if the target account already has tracking data of its own, unless you add `--replace`, which deletes that data first.
 
 Admins manage accounts under **Users**, or from the command line (`user:create`, `user:password`, `user:role`, `user:list`, `user:delete`). The last administrator can never be demoted, disabled or deleted, so you cannot lock yourself out.
 
@@ -229,7 +241,7 @@ OIDC_ADMIN_VALUES=streamradar-admins
 
 Group mapping only works if the provider sends the claim. If it needs its own scope (Authelia: `groups`), request it with `OIDC_SCOPES="openid profile email groups"` and allow that scope on the client. The role is re-evaluated on every sign-in.
 
-By default, anyone who signs in through the provider gets a read-only account on first sign-in. Admins can turn that off on the **Users** page (or set `OIDC_AUTO_PROVISION=false` as the starting value); after that only people who already have an account can use SSO. To add someone, create the account on the Users page with the e-mail address they have at the provider; the password can be left empty for an account that signs in with SSO only.
+By default, anyone who signs in through the provider gets a regular account on first sign-in. Admins can turn that off on the **Users** page (or set `OIDC_AUTO_PROVISION=false` as the starting value); after that only people who already have an account can use SSO. To add someone, create the account on the Users page with the e-mail address they have at the provider; the password can be left empty for an account that signs in with SSO only.
 
 The redirect URI is `https://your-host/auth/oidc/callback`. SSO is additive: local password login stays available (set `AUTH_LOCAL_LOGIN=false` to require SSO), and the `user:*` commands always work, so an unreachable identity provider never locks admins out.
 
@@ -305,6 +317,7 @@ To keep StreamRadar running continuously (including after system restarts):
 | `php artisan user:password <email>` | Reset an account's password (recovery) |
 | `php artisan user:role <email> <role>` | Change an account's role |
 | `php artisan user:list` | List accounts |
+| `php artisan user:move-data <from> <to>` | Move one account's tracking, alerts, blacklist, history and alert destinations to another account |
 | `php artisan user:delete <email>` | Delete an account |
 | `php artisan schedule:work` | Start the scheduler (auto-sync) |
 

@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import { useAuth } from '@/composables/useAuth';
-const { isAdmin } = useAuth();
 import { ref, computed, onMounted } from 'vue';
 import { router, useForm } from '@inertiajs/vue3';
 import { Search, Pencil, Trash2, X, Package, Loader2, Plus, Check, ArrowUpDown, RefreshCw, LayoutGrid, User } from 'lucide-vue-next';
@@ -234,7 +232,7 @@ function deleteChannel(ch: TrackedChannel) { router.delete(`/tracking/channels/$
                                 <img v-if="result.box_art_url" :src="boxArt(result.box_art_url, 40, 54)" :alt="result.name" class="w-8 h-10 rounded object-cover shrink-0" />
                                 <div v-else class="w-8 h-10 bg-gray-200 dark:bg-zinc-700 rounded shrink-0"></div>
                                 <span class="flex-1 text-sm font-medium text-gray-900 dark:text-white truncate">{{ result.name }}</span>
-                                <button v-if="isAdmin && !result.is_tracked" @click="trackCategory(result)" :disabled="tracking === result.id"
+                                <button v-if="!result.is_tracked" @click="trackCategory(result)" :disabled="tracking === result.id"
                                     class="shrink-0 px-3 py-1 text-xs font-medium bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors flex items-center gap-1 disabled:opacity-50">
                                     <Loader2 v-if="tracking === result.id" class="w-3 h-3 animate-spin" />
                                     <Plus v-else class="w-3 h-3" /> Track
@@ -252,7 +250,7 @@ function deleteChannel(ch: TrackedChannel) { router.delete(`/tracking/channels/$
                     <div v-if="tagFilters.length || availableTags.length" id="tag-filters-section" class="bg-white dark:bg-zinc-900 rounded-xl shadow-sm dark:shadow-none p-4 mt-4">
                         <div class="flex items-center justify-between mb-3">
                             <h3 class="text-xs font-semibold text-gray-700 dark:text-zinc-300 uppercase tracking-wide">Tag Filters</h3>
-                            <button v-if="isAdmin && availableTags.length && !showNewTagForm" @click="showNewTagForm = true" class="text-[10px] text-purple-600 dark:text-purple-400 hover:underline flex items-center gap-0.5">
+                            <button v-if="availableTags.length && !showNewTagForm" @click="showNewTagForm = true" class="text-[10px] text-purple-600 dark:text-purple-400 hover:underline flex items-center gap-0.5">
                                 <Plus class="w-3 h-3" /> New
                             </button>
                         </div>
@@ -296,7 +294,7 @@ function deleteChannel(ch: TrackedChannel) { router.delete(`/tracking/channels/$
                                             <span v-if="!tf.min_viewers && !tf.languages?.length">No filters</span>
                                         </div>
                                     </div>
-                                    <button v-if="isAdmin" @click="deleteTagFilter(tf)" class="p-1 text-gray-300 dark:text-zinc-700 hover:text-red-500 dark:hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                                    <button @click="deleteTagFilter(tf)" class="p-1 text-gray-300 dark:text-zinc-700 hover:text-red-500 dark:hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                                         <Trash2 class="w-3 h-3" />
                                     </button>
                                 </div>
@@ -371,13 +369,13 @@ function deleteChannel(ch: TrackedChannel) { router.delete(`/tracking/channels/$
                                     </div>
                                 </div>
                                 <div class="flex items-center gap-1 shrink-0">
-                                    <button v-if="isAdmin" @click="syncCat(cat)" :disabled="syncingCat === cat.id" class="p-2 text-gray-400 hover:text-purple-600 dark:hover:text-purple-400 transition-colors rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-800 disabled:opacity-50" v-tooltip="'Scan'">
+                                    <button @click="syncCat(cat)" :disabled="syncingCat === cat.id" class="p-2 text-gray-400 hover:text-purple-600 dark:hover:text-purple-400 transition-colors rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-800 disabled:opacity-50" v-tooltip="'Scan'">
                                         <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': syncingCat === cat.id }" />
                                     </button>
-                                    <button v-if="isAdmin" @click="editingId === cat.id ? editingId = null : startEdit(cat)" class="p-2 text-gray-400 hover:text-purple-600 dark:hover:text-purple-400 transition-colors rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-800">
+                                    <button @click="editingId === cat.id ? editingId = null : startEdit(cat)" class="p-2 text-gray-400 hover:text-purple-600 dark:hover:text-purple-400 transition-colors rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-800">
                                         <Pencil class="w-4 h-4" />
                                     </button>
-                                    <button v-if="isAdmin" @click="deletingCategory = cat" class="p-2 text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-800">
+                                    <button @click="deletingCategory = cat" class="p-2 text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-800">
                                         <Trash2 class="w-4 h-4" />
                                     </button>
                                 </div>
@@ -466,7 +464,7 @@ function deleteChannel(ch: TrackedChannel) { router.delete(`/tracking/channels/$
         <!-- ==================== CHANNELS TAB ==================== -->
         <div v-if="activeTab === 'channels'">
             <!-- Add channel -->
-            <form v-if="isAdmin" @submit.prevent="trackChannel" class="flex gap-2 mb-6">
+            <form @submit.prevent="trackChannel" class="flex gap-2 mb-6">
                 <input v-model="channelInput" autocomplete="off" type="text" placeholder="Channel login (e.g. shroud)..."
                     class="flex-1 max-w-sm px-3 py-2 text-sm rounded-lg bg-white dark:bg-zinc-900 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-zinc-500 outline-none focus:ring-2 focus:ring-purple-500" />
                 <button type="submit" :disabled="addingChannel || !channelInput.trim()"
@@ -491,7 +489,7 @@ function deleteChannel(ch: TrackedChannel) { router.delete(`/tracking/channels/$
                         <a :href="`https://www.twitch.tv/${ch.user_login}`" target="_blank" class="text-sm font-medium text-gray-900 dark:text-white hover:text-purple-600 dark:hover:text-purple-400 transition-colors">{{ ch.user_name }}</a>
                         <p class="text-xs text-gray-500 dark:text-zinc-500">@{{ ch.user_login }}</p>
                     </div>
-                    <button v-if="isAdmin" @click="deleteChannel(ch)" class="shrink-0 p-1.5 text-gray-400 hover:text-red-500 dark:hover:text-red-400 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors">
+                    <button @click="deleteChannel(ch)" class="shrink-0 p-1.5 text-gray-400 hover:text-red-500 dark:hover:text-red-400 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors">
                         <Trash2 class="w-4 h-4" />
                     </button>
                 </div>

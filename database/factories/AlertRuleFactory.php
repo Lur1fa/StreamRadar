@@ -3,15 +3,19 @@
 namespace Database\Factories;
 
 use App\Models\AlertRule;
+use Database\Factories\Concerns\HasOwner;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 class AlertRuleFactory extends Factory
 {
+    use HasOwner;
+
     protected $model = AlertRule::class;
 
     public function definition(): array
     {
         return [
+            'owner_id' => $this->defaultOwner(),
             'name' => fake()->words(3, true),
             'streamer_login' => null,
             'category_id' => null,

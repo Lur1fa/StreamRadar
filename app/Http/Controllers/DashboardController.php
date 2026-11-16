@@ -12,9 +12,11 @@ class DashboardController extends Controller
 {
     public function index(Request $request): Response
     {
-        $trackedLogins = TrackedChannel::where('is_active', true)->pluck('user_login')->toArray();
+        $user = $request->user();
+        $trackedLogins = TrackedChannel::ownedBy($user)->where('is_active', true)->pluck('user_login')->toArray();
 
         $query = Stream::with('category')
+            ->ownedBy($user)
             ->whereNull('missing_since')
             ->where('thumbnail_url', 'not like', '%ttv-static/404_preview%')
             ->where(function ($q) use ($trackedLogins) {
@@ -57,7 +59,7 @@ class DashboardController extends Controller
         $streams = $query->get();
 
         // Available languages for filter
-        $languages = Stream::whereNotNull('language')
+        $languages = Stream::ownedBy($user)->whereNotNull('language')
             ->select('language')
             ->distinct()
             ->pluck('language')

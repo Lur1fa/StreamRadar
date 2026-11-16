@@ -9,6 +9,7 @@ use App\Models\Category;
 use App\Models\Setting;
 use App\Models\TagFilter;
 use App\Models\TrackedChannel;
+use App\Models\UserSetting;
 use App\Services\AlertService;
 use App\Services\ConfigImportService;
 use App\Services\Http\SafeHttpClient;
@@ -25,7 +26,11 @@ use Inertia\Response;
 use Throwable;
 
 /**
- * All routes of this controller are administrator-only (see routes/web.php).
+ * The Settings page serves two audiences. Every account reads and writes its
+ * own settings (default filters, appearance, where its alerts are delivered)
+ * and can test its own destinations. The installation's settings (Twitch API
+ * keys, scanning, SMTP server), the Twitch test, the update check and the
+ * backup are administrator-only (see routes/web.php and UpdateSettingsRequest).
  *
  * Secret handling: secrets never leave the server. The page receives only
  * `<key>_set` / `<key>_masked`; updates ignore empty or masked values; the
@@ -33,31 +38,38 @@ use Throwable;
  */
 class SettingsController extends Controller
 {
-    private const SETTING_DEFAULTS = [
-        'sync_frequency_minutes' => '1',
-        'global_min_viewers' => '0',
-        'global_min_avg_viewers' => '0',
-        'global_languages' => '[]',
-        'global_keywords' => '[]',
-        'theme' => 'system',
-        'webhook_format' => 'json',
-    ];
-
-    public function index(): Response
+    public function index(Request $request): Response
     {
+        $user = $request->user();
+
+        $settings = UserSetting::publicView($user, Setting::ACCOUNT_KEYS, Setting::DEFAULTS);
+        if ($user->isAdmin()) {
+            $settings += Setting::publicView(Setting::SERVER_KEYS, Setting::DEFAULTS);
+        }
+
         return Inertia::render('Settings', [
-            'settings' => Setting::publicView(Setting::MANAGED_KEYS, self::SETTING_DEFAULTS),
-            'activeCategoriesCount' => Category::where('is_active', true)->count(),
-            'webhookAllowedHosts' => (array) config('security.webhook.allowed_hosts', []),
+            'settings' => $settings,
+            // Twitch is asked once per category, however many accounts track it.
+            'activeCategoriesCount' => $user->isAdmin() ? Category::where('is_active', true)->distinct()->count('twitch_id') : 0,
+            // Internal host names: shown in the administrators' Access section only.
+            'webhookAllowedHosts' => $user->isAdmin() ? (array) config('security.webhook.allowed_hosts', []) : [],
+            'emailAvailable' => ! empty(Setting::get('smtp_host')),
         ]);
     }
 
     public function update(UpdateSettingsRequest $request): RedirectResponse
     {
+        $user = $request->user();
         $validated = $request->validated();
 
+        // The request has already dropped every key this account may not write.
         foreach ((array) $request->input('clear_secrets', []) as $key) {
-            if (Setting::isSecret($key)) {
+            if (! Setting::isSecret($key)) {
+                continue;
+            }
+            if (Setting::isAccountKey($key)) {
+                UserSetting::forget($user, $key);
+            } elseif ($user->isAdmin()) {
                 Setting::forget($key);
             }
         }
@@ -71,7 +83,7 @@ class SettingsController extends Controller
             }
         }
 
-        Setting::setMany($data);
+        Setting::storeFor($user, $data);
 
         if (array_intersect_key($data, array_flip(['smtp_host', 'smtp_port', 'smtp_username', 'smtp_password', 'smtp_encryption', 'mail_from_address', 'mail_from_name']))) {
             $this->updateMailConfig();
@@ -80,20 +92,30 @@ class SettingsController extends Controller
         return back()->with('success', 'Settings saved.');
     }
 
-    public function export(): JsonResponse
+    /**
+     * Backup of the installation settings and of the signed-in
+     * administrator's own account data.
+     */
+    public function export(Request $request): JsonResponse
     {
+        $user = $request->user();
+        $exportable = Setting::exportableKeys();
+
         return response()->json([
             'format' => 2,
             'app' => 'StreamRadar',
             'exported_at' => now()->toIso8601String(),
             // Never includes secrets (Twitch secret, SMTP password, bot token, webhook URLs).
-            'settings' => Setting::exportable(),
-            'categories' => Category::all(['twitch_id', 'name', 'box_art_url', 'is_active', 'notifications_enabled', 'use_global_filters', 'filter_source', 'min_viewers', 'min_avg_viewers', 'languages', 'keywords', 'tags'])->toArray(),
-            'channels' => TrackedChannel::all(['twitch_user_id', 'user_login', 'user_name', 'profile_image_url', 'is_active'])->toArray(),
-            'blacklist' => BlacklistRule::all(['type', 'value', 'twitch_user_id', 'profile_image_url'])->toArray(),
-            'tag_filters' => TagFilter::all(['tag', 'min_viewers', 'min_avg_viewers', 'languages', 'keywords'])->toArray(),
-            'alerts' => AlertRule::with('category')->get()->map(function ($rule) {
-                $categoryMap = Category::whereIn('id', $rule->category_ids ?? [])->pluck('twitch_id')->toArray();
+            'settings' => [
+                ...Setting::getMany(array_values(array_intersect($exportable, Setting::SERVER_KEYS))),
+                ...UserSetting::getMany($user, array_values(array_intersect($exportable, Setting::ACCOUNT_KEYS))),
+            ],
+            'categories' => Category::ownedBy($user)->get(['twitch_id', 'name', 'box_art_url', 'is_active', 'notifications_enabled', 'use_global_filters', 'filter_source', 'min_viewers', 'min_avg_viewers', 'languages', 'keywords', 'tags'])->toArray(),
+            'channels' => TrackedChannel::ownedBy($user)->get(['twitch_user_id', 'user_login', 'user_name', 'profile_image_url', 'is_active'])->toArray(),
+            'blacklist' => BlacklistRule::ownedBy($user)->get(['type', 'value', 'twitch_user_id', 'profile_image_url'])->toArray(),
+            'tag_filters' => TagFilter::ownedBy($user)->get(['tag', 'min_viewers', 'min_avg_viewers', 'languages', 'keywords'])->toArray(),
+            'alerts' => AlertRule::ownedBy($user)->with('category')->get()->map(function ($rule) use ($user) {
+                $categoryMap = Category::ownedBy($user)->whereIn('id', $rule->category_ids ?? [])->pluck('twitch_id')->toArray();
 
                 return [
                     'name' => $rule->name,
@@ -131,7 +153,7 @@ class SettingsController extends Controller
         }
 
         try {
-            $counts = $importer->import($data);
+            $counts = $importer->import($data, $request->user());
         } catch (ValidationException $e) {
             $first = collect($e->errors())->flatten()->first();
 
@@ -159,9 +181,9 @@ class SettingsController extends Controller
         return response()->json($result);
     }
 
-    public function testEmail(TwitchApiService $twitch): JsonResponse
+    public function testEmail(Request $request, TwitchApiService $twitch): JsonResponse
     {
-        $recipient = Setting::get('mail_to');
+        $recipient = UserSetting::get($request->user(), 'mail_to');
         if (! $recipient) {
             return response()->json(['success' => false, 'message' => 'No recipient email configured.']);
         }
@@ -178,9 +200,9 @@ class SettingsController extends Controller
         }
     }
 
-    public function testDiscord(TwitchApiService $twitch, SafeHttpClient $http): JsonResponse
+    public function testDiscord(Request $request, TwitchApiService $twitch, SafeHttpClient $http): JsonResponse
     {
-        $webhookUrl = Setting::get('discord_webhook_url');
+        $webhookUrl = UserSetting::get($request->user(), 'discord_webhook_url');
         if (! $webhookUrl) {
             return response()->json(['success' => false, 'message' => 'No Discord webhook URL configured.']);
         }
@@ -218,10 +240,10 @@ class SettingsController extends Controller
         }
     }
 
-    public function testTelegram(TwitchApiService $twitch, SafeHttpClient $http): JsonResponse
+    public function testTelegram(Request $request, TwitchApiService $twitch, SafeHttpClient $http): JsonResponse
     {
-        $token = Setting::get('telegram_bot_token');
-        $chatId = Setting::get('telegram_chat_id');
+        $token = UserSetting::get($request->user(), 'telegram_bot_token');
+        $chatId = UserSetting::get($request->user(), 'telegram_chat_id');
         if (! $token || ! $chatId) {
             return response()->json(['success' => false, 'message' => 'Telegram bot token or chat ID not configured.']);
         }
@@ -256,9 +278,9 @@ class SettingsController extends Controller
         }
     }
 
-    public function testWebhook(TwitchApiService $twitch, SafeHttpClient $http): JsonResponse
+    public function testWebhook(Request $request, TwitchApiService $twitch, SafeHttpClient $http): JsonResponse
     {
-        $webhookUrl = Setting::get('webhook_url');
+        $webhookUrl = UserSetting::get($request->user(), 'webhook_url');
         if (! $webhookUrl) {
             return response()->json(['success' => false, 'message' => 'No webhook URL configured.']);
         }
@@ -266,7 +288,7 @@ class SettingsController extends Controller
         $fake = $this->pickTestStream($twitch);
 
         try {
-            if (Setting::get('webhook_format', 'json') === 'ntfy') {
+            if (UserSetting::get($request->user(), 'webhook_format', 'json') === 'ntfy') {
                 $body = "{$fake['title']}\n"
                     ."{$fake['game']} · ".number_format($fake['viewers']).' viewers'."\n"
                     .'Tags: '.implode(', ', ['English', $fake['game']])."\n"

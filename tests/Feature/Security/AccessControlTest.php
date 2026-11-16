@@ -28,41 +28,59 @@ test('guests are redirected to login from every protected page', function (strin
     $this->{$method}($uri)->assertRedirect('/login');
 })->with('protected pages');
 
-dataset('admin only writes', [
+// The installation and its accounts: administrators only.
+dataset('admin only', [
+    ['get', '/settings/export'],
+    ['post', '/settings/import'],
+    ['post', '/settings/test-twitch'],
+    ['get', '/settings/check-update'],
+    ['get', '/users'],
+    ['post', '/users'],
+    ['put', '/users/sso'],
+]);
+
+// An account's own data: every signed-in account.
+dataset('own data writes', [
     ['post', '/sync'],
     ['post', '/alerts'],
     ['post', '/blacklist'],
     ['delete', '/history'],
     ['put', '/settings'],
-    ['get', '/settings'],
-    ['get', '/settings/export'],
-    ['post', '/settings/import'],
     ['post', '/settings/test-webhook'],
-    ['get', '/users'],
-    ['post', '/users'],
-    ['get', '/tracking/search'],
     ['post', '/tracking/channels'],
+    ['post', '/tracking/categories'],
+    ['post', '/tracking/tag-filters'],
 ]);
 
 test('a regular user is forbidden from admin-only endpoints', function (string $method, string $uri) {
     $this->actingAs(User::factory()->create());
     $this->{$method}($uri)->assertForbidden();
-})->with('admin only writes');
+})->with('admin only');
 
 test('guests cannot reach admin-only endpoints either', function (string $method, string $uri) {
     // Guests are redirected to login rather than being shown a 403.
     $response = $this->{$method}($uri);
     expect($response->getStatusCode())->toBe(302);
     $response->assertRedirect('/login');
-})->with('admin only writes');
+})->with('admin only');
 
-test('a regular user can view read-only pages', function () {
+test('guests cannot change any account data', function (string $method, string $uri) {
+    $this->{$method}($uri)->assertRedirect('/login');
+})->with('own data writes');
+
+test('a regular user is not forbidden from working on their own data', function (string $method, string $uri) {
     $this->actingAs(User::factory()->create());
 
-    $this->get('/')->assertOk();
-    $this->get('/alerts')->assertOk();
-    $this->get('/history')->assertOk();
-    $this->get('/account')->assertOk();
+    // Empty requests fail validation or succeed, but are never refused for the role.
+    expect($this->{$method}($uri)->getStatusCode())->not->toBe(403);
+})->with('own data writes');
+
+test('a regular user can open every page of their own data', function () {
+    $this->actingAs(User::factory()->create());
+
+    foreach (['/', '/tracking', '/alerts', '/blacklist', '/history', '/settings', '/account'] as $page) {
+        $this->get($page)->assertOk();
+    }
 });
 
 test('an admin can reach admin pages', function () {
@@ -76,6 +94,6 @@ test('an Inertia write that fails authorization returns a flash error, not a raw
     $this->actingAs(User::factory()->create());
 
     $this->withHeaders(['X-Inertia' => 'true'])
-        ->post('/alerts', ['name' => 'x'])
+        ->post('/users', ['name' => 'x'])
         ->assertRedirect();
 });

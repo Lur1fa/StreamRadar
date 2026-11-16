@@ -8,9 +8,9 @@ beforeEach(function () {
 
     Setting::set('twitch_client_secret', 'tw-secret-abcdef123456');
     Setting::set('smtp_password', 'smtp-pass-abcdef123456');
-    Setting::set('telegram_bot_token', '123456:ABCDEFghijklmnopqrstuvwxyz0123456789');
-    Setting::set('discord_webhook_url', 'https://discord.com/api/webhooks/42/zzSECRETtoken123');
-    Setting::set('webhook_url', 'https://ntfy.example.com/secret-topic-xyz');
+    setAccountSetting('telegram_bot_token', '123456:ABCDEFghijklmnopqrstuvwxyz0123456789');
+    setAccountSetting('discord_webhook_url', 'https://discord.com/api/webhooks/42/zzSECRETtoken123');
+    setAccountSetting('webhook_url', 'https://ntfy.example.com/secret-topic-xyz');
 });
 
 $secretValues = [

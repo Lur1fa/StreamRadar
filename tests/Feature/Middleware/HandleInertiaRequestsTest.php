@@ -3,7 +3,6 @@
 use App\Models\AlertRule;
 use App\Models\BlacklistRule;
 use App\Models\Category;
-use App\Models\Setting;
 use App\Models\Stream;
 
 test('shares stats with correct counts', function () {
@@ -24,7 +23,7 @@ test('shares stats with correct counts', function () {
 });
 
 test('shares appSettings with theme', function () {
-    Setting::set('theme', 'dark');
+    setAccountSetting('theme', 'dark');
 
     $this->get('/')
         ->assertInertia(fn ($page) => $page

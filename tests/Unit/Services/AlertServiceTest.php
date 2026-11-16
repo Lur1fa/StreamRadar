@@ -2,7 +2,6 @@
 
 use App\Models\AlertRule;
 use App\Models\HistoryEvent;
-use App\Models\Setting;
 use App\Models\Stream;
 use App\Models\StreamAlertTracking;
 use App\Services\AlertService;
@@ -222,7 +221,7 @@ test('sendNotifications does nothing when array is empty', function () {
 
 test('sendNotifications sends Discord webhook when configured', function () {
     Http::fake();
-    Setting::set('discord_webhook_url', 'https://discord.com/api/webhooks/test');
+    setAccountSetting('discord_webhook_url', 'https://discord.com/api/webhooks/test');
     $service = app(AlertService::class);
 
     $rule = AlertRule::factory()->withDiscord()->create();
@@ -235,7 +234,7 @@ test('sendNotifications sends Discord webhook when configured', function () {
 
 test('sendNotifications uses the shared fallback format for Discord', function () {
     Http::fake();
-    Setting::set('discord_webhook_url', 'https://discord.com/api/webhooks/test');
+    setAccountSetting('discord_webhook_url', 'https://discord.com/api/webhooks/test');
     $service = app(AlertService::class);
 
     $rule = AlertRule::factory()->withDiscord()->create(['name' => 'My rule']);
@@ -254,7 +253,7 @@ test('sendNotifications uses the shared fallback format for Discord', function (
 
 test('sendNotifications renders a custom template for Discord', function () {
     Http::fake();
-    Setting::set('discord_webhook_url', 'https://discord.com/api/webhooks/test');
+    setAccountSetting('discord_webhook_url', 'https://discord.com/api/webhooks/test');
     $service = app(AlertService::class);
 
     $rule = AlertRule::factory()->withDiscord()->create([
@@ -275,7 +274,7 @@ test('sendNotifications renders a custom template for Discord', function () {
 
 test('sendNotifications sends email when configured', function () {
     Mail::fake();
-    Setting::set('mail_to', 'test@example.com');
+    setAccountSetting('mail_to', 'test@example.com');
     $service = app(AlertService::class);
 
     $rule = AlertRule::factory()->withEmail()->create();
@@ -288,8 +287,8 @@ test('sendNotifications sends email when configured', function () {
 
 test('sendNotifications sends Telegram when configured', function () {
     Http::fake();
-    Setting::set('telegram_bot_token', 'test-token');
-    Setting::set('telegram_chat_id', '12345');
+    setAccountSetting('telegram_bot_token', 'test-token');
+    setAccountSetting('telegram_chat_id', '12345');
     $service = app(AlertService::class);
 
     $rule = AlertRule::factory()->withTelegram()->create();
@@ -302,7 +301,7 @@ test('sendNotifications sends Telegram when configured', function () {
 
 test('sendNotifications sends webhook when configured', function () {
     Http::fake();
-    Setting::set('webhook_url', 'https://example.com/webhook');
+    setAccountSetting('webhook_url', 'https://example.com/webhook');
     $service = app(AlertService::class);
 
     $rule = AlertRule::factory()->withWebhook()->create();
@@ -315,7 +314,7 @@ test('sendNotifications sends webhook when configured', function () {
 
 test('sendNotifications sends JSON payload by default', function () {
     Http::fake();
-    Setting::set('webhook_url', 'https://example.com/webhook');
+    setAccountSetting('webhook_url', 'https://example.com/webhook');
     $service = app(AlertService::class);
 
     $rule = AlertRule::factory()->withWebhook()->create();
@@ -329,7 +328,7 @@ test('sendNotifications sends JSON payload by default', function () {
 
 test('JSON webhook ignores a custom notification template', function () {
     Http::fake();
-    Setting::set('webhook_url', 'https://example.com/webhook');
+    setAccountSetting('webhook_url', 'https://example.com/webhook');
     $service = app(AlertService::class);
 
     $rule = AlertRule::factory()->withWebhook()->create([
@@ -348,8 +347,8 @@ test('JSON webhook ignores a custom notification template', function () {
 
 test('sendNotifications sends plain text with ntfy headers when format is ntfy', function () {
     Http::fake();
-    Setting::set('webhook_url', 'https://ntfy.example.com/topic');
-    Setting::set('webhook_format', 'ntfy');
+    setAccountSetting('webhook_url', 'https://ntfy.example.com/topic');
+    setAccountSetting('webhook_format', 'ntfy');
     $service = app(AlertService::class);
 
     $rule = AlertRule::factory()->withWebhook()->create();
@@ -366,7 +365,7 @@ test('sendNotifications sends plain text with ntfy headers when format is ntfy',
 
 test('sendNotifications does not send Discord when no rule has notify_discord', function () {
     Http::fake();
-    Setting::set('discord_webhook_url', 'https://discord.com/api/webhooks/test');
+    setAccountSetting('discord_webhook_url', 'https://discord.com/api/webhooks/test');
     $service = app(AlertService::class);
 
     $rule = AlertRule::factory()->create(['notify_discord' => false]);
@@ -379,8 +378,8 @@ test('sendNotifications does not send Discord when no rule has notify_discord', 
 
 test('sendNotifications skips Discord when global notifications_discord_enabled is 0', function () {
     Http::fake();
-    Setting::set('discord_webhook_url', 'https://discord.com/api/webhooks/test');
-    Setting::set('notifications_discord_enabled', '0');
+    setAccountSetting('discord_webhook_url', 'https://discord.com/api/webhooks/test');
+    setAccountSetting('notifications_discord_enabled', '0');
     $service = app(AlertService::class);
 
     $rule = AlertRule::factory()->withDiscord()->create();
@@ -393,8 +392,8 @@ test('sendNotifications skips Discord when global notifications_discord_enabled 
 
 test('sendNotifications skips email when global notifications_email_enabled is 0', function () {
     Mail::fake();
-    Setting::set('mail_to', 'test@example.com');
-    Setting::set('notifications_email_enabled', '0');
+    setAccountSetting('mail_to', 'test@example.com');
+    setAccountSetting('notifications_email_enabled', '0');
     $service = app(AlertService::class);
 
     $rule = AlertRule::factory()->withEmail()->create();

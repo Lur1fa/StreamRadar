@@ -10,12 +10,32 @@ use App\Models\HistoryEvent;
 use App\Models\Setting;
 use App\Models\Stream;
 use App\Models\TrackedChannel;
+use App\Models\User;
 use App\Support\Redactor;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
+use Throwable;
 
+/**
+ * Tracking belongs to accounts, but Twitch is asked only once: during a full
+ * sync every category is fetched a single time no matter how many accounts
+ * track it, and the live status of all tracked channels is fetched in one
+ * go. Each account then gets its own stream rows, filtered by its own
+ * filters and blacklist, with its own alerts and history.
+ */
 class SyncService
 {
-    private ?bool $anyAlertNeedsAvg = null;
+    /** @var array<int, bool> per account: does any active alert need average viewers? */
+    private array $alertsNeedAvg = [];
+
+    /** True while a full sync runs and Twitch responses are shared between accounts. */
+    private bool $sharing = false;
+
+    /** @var array<string, array<int, array<string, mixed>>> Twitch category id => live streams */
+    private array $sharedCategoryStreams = [];
+
+    /** @var array<int, array<string, mixed>>|null live streams of every tracked channel of every account */
+    private ?array $sharedChannelStreams = null;
 
     public function __construct(
         private TwitchApiService $twitch,
@@ -28,12 +48,119 @@ class SyncService
         return $this->alerts;
     }
 
+    /**
+     * Sync every account that tracks something (what the scheduler runs).
+     */
     public function sync(): SyncResult
     {
         $start = microtime(true);
+        $runs = [];
+
+        $this->sharing = true;
+        $this->sharedCategoryStreams = [];
+        $this->sharedChannelStreams = null;
+
+        try {
+            $accounts = $this->accountsToSync();
+            $this->prefetchTrackedChannels($accounts);
+
+            foreach ($accounts as $account) {
+                try {
+                    $runs[] = $this->collect($account);
+                } catch (Throwable $e) {
+                    // One account's data must never stop the others from syncing.
+                    Log::error('Sync failed for an account', [
+                        'account' => $account->id,
+                        'exception' => $e::class,
+                        'error' => Redactor::message($e->getMessage()),
+                    ]);
+                }
+            }
+        } finally {
+            $this->sharing = false;
+            $this->sharedCategoryStreams = [];
+            $this->sharedChannelStreams = null;
+        }
+
+        try {
+            return $this->finish($runs, $start);
+        } finally {
+            Setting::set('last_sync_at', now()->toIso8601String());
+        }
+    }
+
+    /**
+     * Sync one account on demand (the "sync now" button). Always asks Twitch
+     * afresh and leaves the schedule of the automatic sync untouched.
+     */
+    public function syncAccount(User $account): SyncResult
+    {
+        $start = microtime(true);
+
+        return $this->finish([$this->collect($account)], $start);
+    }
+
+    /**
+     * Accounts that can sign in and track at least one category or channel.
+     *
+     * @return Collection<int, User>
+     */
+    private function accountsToSync(): Collection
+    {
+        return User::query()
+            ->whereNull('disabled_at')
+            ->where(function ($q) {
+                $q->whereHas('categories', fn ($c) => $c->where('is_active', true))
+                    ->orWhereHas('trackedChannels', fn ($c) => $c->where('is_active', true))
+                    // Accounts that stopped tracking still need their remaining streams ended.
+                    ->orWhereHas('streams');
+            })
+            ->orderBy('id')
+            ->get();
+    }
+
+    /**
+     * One request for the tracked channels of all accounts. When it fails,
+     * each account falls back to asking for its own channels.
+     *
+     * @param  Collection<int, User>  $accounts
+     */
+    private function prefetchTrackedChannels(Collection $accounts): void
+    {
+        $logins = TrackedChannel::query()
+            ->whereIn('owner_id', $accounts->modelKeys())
+            ->where('is_active', true)
+            ->pluck('user_login')
+            ->map(fn ($login) => strtolower($login))
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($logins === []) {
+            $this->sharedChannelStreams = [];
+
+            return;
+        }
+
+        try {
+            $this->sharedChannelStreams = $this->twitch->getStreamsByUsers($logins);
+        } catch (\Exception $e) {
+            Log::error('Failed to fetch tracked channel streams: '.Redactor::message($e->getMessage()));
+            $this->sharedChannelStreams = null;
+        }
+    }
+
+    /**
+     * Bring one account's streams up to date and work out which of its
+     * alerts fired. Sends nothing yet.
+     *
+     * @return array{account: User, new: int, updated: int, ended: int, alerts: int, triggered: array<int, array{rule: AlertRule, stream: Stream}>}
+     */
+    private function collect(User $account): array
+    {
         $totals = ['new' => 0, 'updated' => 0, 'alerts' => 0];
 
-        $categories = Category::where('is_active', true)->get();
+        $categories = Category::ownedBy($account)->where('is_active', true)->get();
         $allFetchedStreamIds = [];
         $allApiIds = [];
         $allTriggered = [];
@@ -50,7 +177,7 @@ class SyncService
         }
 
         // Sync tracked channels
-        $channelResult = $this->syncTrackedChannels();
+        $channelResult = $this->syncTrackedChannels($account);
         $totals['new'] += $channelResult['new'];
         $totals['updated'] += $channelResult['updated'];
         $totals['alerts'] += $channelResult['alerts'];
@@ -58,8 +185,8 @@ class SyncService
         array_push($allApiIds, ...$channelResult['all_api_ids']);
         array_push($allTriggered, ...$channelResult['triggered_alerts']);
 
-        // Remove streams no longer in our filtered set
-        $missingQuery = Stream::with('category');
+        // Remove streams no longer in this account's filtered set
+        $missingQuery = Stream::with('category')->ownedBy($account);
         if (! empty($allFetchedStreamIds)) {
             $missingQuery->whereNotIn('twitch_id', $allFetchedStreamIds);
         }
@@ -91,7 +218,7 @@ class SyncService
             }
 
             // Grace period expired — actually offline
-            HistoryEvent::create([
+            HistoryEvent::createFor($account, [
                 'type' => 'stream_offline',
                 'stream_twitch_id' => $stream->twitch_id,
                 'streamer_login' => $stream->user_login,
@@ -106,39 +233,63 @@ class SyncService
             $endedCount++;
         }
 
+        return [
+            'account' => $account,
+            'new' => $totals['new'],
+            'updated' => $totals['updated'],
+            'ended' => $endedCount,
+            'alerts' => $totals['alerts'],
+            'triggered' => $allTriggered,
+        ];
+    }
+
+    /**
+     * Deliver the alerts of each account and record the sync in its history.
+     * Notification delivery is best-effort: whatever happens inside, every
+     * account's sync is recorded, so the scheduler never gets stuck on a
+     * failing provider.
+     *
+     * @param  array<int, array{account: User, new: int, updated: int, ended: int, alerts: int, triggered: array}>  $runs
+     */
+    private function finish(array $runs, float $start): SyncResult
+    {
         $this->fetchMissingAvatars();
 
-        // Send all alert notifications in one batch. Notification delivery is
-        // best-effort: whatever happens inside, the sync state below is always
-        // recorded so the scheduler never gets stuck on a failing provider.
-        try {
-            $this->alerts->sendNotifications($allTriggered);
-        } catch (\Throwable $e) {
-            Log::error('Alert notification dispatch failed', [
-                'exception' => $e::class,
-                'error' => Redactor::message($e->getMessage()),
-            ]);
-        } finally {
-            Setting::set('last_sync_at', now()->toIso8601String());
+        $duration = round(microtime(true) - $start, 2);
+        $totals = ['new' => 0, 'updated' => 0, 'ended' => 0, 'alerts' => 0];
 
-            $duration = round(microtime(true) - $start, 2);
+        foreach ($runs as $run) {
+            try {
+                $this->alerts->sendNotifications($run['triggered']);
+            } catch (Throwable $e) {
+                Log::error('Alert notification dispatch failed', [
+                    'exception' => $e::class,
+                    'error' => Redactor::message($e->getMessage()),
+                ]);
+            } finally {
+                $duration = round(microtime(true) - $start, 2);
 
-            HistoryEvent::create([
-                'type' => 'sync_completed',
-                'metadata' => [
-                    'new' => $totals['new'],
-                    'updated' => $totals['updated'],
-                    'ended' => $endedCount,
-                    'alerts' => $totals['alerts'],
-                    'duration' => $duration,
-                ],
-            ]);
+                HistoryEvent::createFor($run['account'], [
+                    'type' => 'sync_completed',
+                    'metadata' => [
+                        'new' => $run['new'],
+                        'updated' => $run['updated'],
+                        'ended' => $run['ended'],
+                        'alerts' => $run['alerts'],
+                        'duration' => $duration,
+                    ],
+                ]);
+            }
+
+            foreach ($totals as $key => $_) {
+                $totals[$key] += $run[$key];
+            }
         }
 
         return new SyncResult(
             newStreams: $totals['new'],
             updatedStreams: $totals['updated'],
-            endedStreams: $endedCount,
+            endedStreams: $totals['ended'],
             alertsTriggered: $totals['alerts'],
             durationSeconds: $duration,
         );
@@ -153,10 +304,11 @@ class SyncService
         $allApiIds = [];
         $allTriggered = [];
 
-        $blacklist = $this->loadBlacklist();
+        $ownerId = (int) $category->owner_id;
+        $blacklist = $this->loadBlacklist($ownerId);
 
         try {
-            $twitchStreams = $this->twitch->getAllStreamsForCategory($category->twitch_id);
+            $twitchStreams = $this->categoryStreams($category->twitch_id);
         } catch (\Exception $e) {
             Log::error("Failed to fetch streams for category {$category->name}: ".Redactor::message($e->getMessage()));
 
@@ -167,8 +319,8 @@ class SyncService
 
         // Prefetch avg_viewers if category filter or any alert rule requires it
         $avgViewersMap = [];
-        $this->anyAlertNeedsAvg ??= AlertRule::where('is_active', true)->whereNotNull('min_avg_viewers')->exists();
-        if (! empty($filters['min_avg_viewers']) || $this->anyAlertNeedsAvg) {
+        $this->alertsNeedAvg[$ownerId] ??= AlertRule::ownedBy($ownerId)->where('is_active', true)->whereNotNull('min_avg_viewers')->exists();
+        if (! empty($filters['min_avg_viewers']) || $this->alertsNeedAvg[$ownerId]) {
             $logins = array_map(fn ($s) => strtolower($s['user_login'] ?? ''), $twitchStreams);
             $avgViewersMap = $this->tracker->getAvgViewersBulk(array_unique(array_filter($logins)));
         }
@@ -189,11 +341,12 @@ class SyncService
             }
 
             $fetchedIds[] = $twitchStream['id'];
-            $existing = Stream::where('twitch_id', $twitchStream['id'])->first();
+            $existing = Stream::ownedBy($ownerId)->where('twitch_id', $twitchStream['id'])->first();
             $isNew = ! $existing;
             $oldStream = $existing ? clone $existing : null;
 
-            $stream = Stream::updateOrCreate(
+            $stream = Stream::updateOrCreateFor(
+                $ownerId,
                 ['twitch_id' => $twitchStream['id']],
                 [
                     'user_id' => $twitchStream['user_id'] ?? '',
@@ -224,7 +377,7 @@ class SyncService
             if ($isNew) {
                 $newStreams++;
 
-                HistoryEvent::create([
+                HistoryEvent::createFor($ownerId, [
                     'type' => 'stream_online',
                     'stream_twitch_id' => $stream->twitch_id,
                     'streamer_login' => $stream->user_login,
@@ -244,15 +397,16 @@ class SyncService
         return ['new' => $newStreams, 'updated' => $updatedStreams, 'alerts' => $alertsTriggered, 'stream_ids' => $fetchedIds, 'all_api_ids' => $allApiIds, 'triggered_alerts' => $allTriggered];
     }
 
-    public function syncTrackedChannels(bool $silentAlerts = false): array
+    public function syncTrackedChannels(User|int $owner, bool $silentAlerts = false): array
     {
-        $channels = TrackedChannel::where('is_active', true)->get();
+        $ownerId = $owner instanceof User ? (int) $owner->id : $owner;
+        $channels = TrackedChannel::ownedBy($ownerId)->where('is_active', true)->get();
         if ($channels->isEmpty()) {
             return ['new' => 0, 'updated' => 0, 'alerts' => 0, 'stream_ids' => [], 'all_api_ids' => [], 'triggered_alerts' => []];
         }
 
         $logins = $channels->pluck('user_login')->toArray();
-        $blacklist = $this->loadBlacklist();
+        $blacklist = $this->loadBlacklist($ownerId);
         $newStreams = 0;
         $updatedStreams = 0;
         $alertsTriggered = 0;
@@ -261,7 +415,7 @@ class SyncService
         $allTriggered = [];
 
         try {
-            $twitchStreams = $this->twitch->getStreamsByUsers($logins);
+            $twitchStreams = $this->channelStreams($logins);
         } catch (\Exception $e) {
             Log::error('Failed to fetch tracked channel streams: '.Redactor::message($e->getMessage()));
 
@@ -270,7 +424,7 @@ class SyncService
 
         // Map game_id to existing categories (don't auto-create)
         $gameIds = collect($twitchStreams)->pluck('game_id')->unique()->filter()->toArray();
-        $categoryMap = Category::whereIn('twitch_id', $gameIds)->pluck('id', 'twitch_id')->toArray();
+        $categoryMap = Category::ownedBy($ownerId)->whereIn('twitch_id', $gameIds)->pluck('id', 'twitch_id')->toArray();
 
         foreach ($twitchStreams as $twitchStream) {
             $allApiIds[] = $twitchStream['id'];
@@ -284,13 +438,14 @@ class SyncService
             }
 
             $fetchedIds[] = $twitchStream['id'];
-            $existing = Stream::where('twitch_id', $twitchStream['id'])->first();
+            $existing = Stream::ownedBy($ownerId)->where('twitch_id', $twitchStream['id'])->first();
             $isNew = ! $existing;
             $oldStream = $existing ? clone $existing : null;
 
             $categoryId = $categoryMap[$twitchStream['game_id'] ?? ''] ?? null;
 
-            $stream = Stream::updateOrCreate(
+            $stream = Stream::updateOrCreateFor(
+                $ownerId,
                 ['twitch_id' => $twitchStream['id']],
                 [
                     'user_id' => $twitchStream['user_id'] ?? '',
@@ -320,7 +475,7 @@ class SyncService
 
             if ($isNew) {
                 $newStreams++;
-                HistoryEvent::create([
+                HistoryEvent::createFor($ownerId, [
                     'type' => 'stream_online',
                     'stream_twitch_id' => $stream->twitch_id,
                     'streamer_login' => $stream->user_login,
@@ -340,12 +495,48 @@ class SyncService
         return ['new' => $newStreams, 'updated' => $updatedStreams, 'alerts' => $alertsTriggered, 'stream_ids' => $fetchedIds, 'all_api_ids' => $allApiIds, 'triggered_alerts' => $allTriggered];
     }
 
-    private function loadBlacklist(): array
+    /**
+     * Live streams of a Twitch category. During a full sync the answer is
+     * reused for every account that tracks the same category.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function categoryStreams(string $twitchId): array
+    {
+        if (! $this->sharing) {
+            return $this->twitch->getAllStreamsForCategory($twitchId);
+        }
+
+        return $this->sharedCategoryStreams[$twitchId] ??= $this->twitch->getAllStreamsForCategory($twitchId);
+    }
+
+    /**
+     * Live streams of the given channels, from the shared answer of a full
+     * sync when there is one.
+     *
+     * @param  string[]  $logins
+     * @return array<int, array<string, mixed>>
+     */
+    private function channelStreams(array $logins): array
+    {
+        if (! $this->sharing || $this->sharedChannelStreams === null) {
+            return $this->twitch->getStreamsByUsers($logins);
+        }
+
+        $wanted = array_flip(array_map('strtolower', $logins));
+
+        return array_values(array_filter(
+            $this->sharedChannelStreams,
+            fn ($stream) => isset($wanted[strtolower($stream['user_login'] ?? '')]),
+        ));
+    }
+
+    private function loadBlacklist(int $ownerId): array
     {
         return [
-            'channels' => BlacklistRule::channels()->pluck('value')->map(fn ($v) => strtolower($v))->toArray(),
-            'keywords' => BlacklistRule::keywords()->pluck('value')->map(fn ($v) => strtolower($v))->toArray(),
-            'tags' => BlacklistRule::tags()->pluck('value')->map(fn ($v) => strtolower($v))->toArray(),
+            'channels' => BlacklistRule::ownedBy($ownerId)->channels()->pluck('value')->map(fn ($v) => strtolower($v))->toArray(),
+            'keywords' => BlacklistRule::ownedBy($ownerId)->keywords()->pluck('value')->map(fn ($v) => strtolower($v))->toArray(),
+            'tags' => BlacklistRule::ownedBy($ownerId)->tags()->pluck('value')->map(fn ($v) => strtolower($v))->toArray(),
         ];
     }
 

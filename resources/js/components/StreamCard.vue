@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import { useAuth } from '@/composables/useAuth';
-const { isAdmin } = useAuth();
 import { router } from '@inertiajs/vue3';
 import { ExternalLink, ShieldBan, UserMinus, UserPlus, Eye, Clock, Pin, PinOff } from 'lucide-vue-next';
 import LanguageFlag from '@/components/LanguageFlag.vue';
@@ -89,14 +87,14 @@ function trackChannel() {
                 <a :href="twitchUrl(stream)" target="_blank" class="p-1 text-gray-400 hover:text-purple-500 dark:hover:text-purple-400" v-tooltip="'Open on Twitch'">
                     <ExternalLink class="w-4 h-4" />
                 </a>
-                <button v-if="isAdmin && isTrackedChannel" @click="untrackChannel" class="p-1 text-gray-400 hover:text-orange-500" v-tooltip="'Untrack channel'">
+                <button v-if="isTrackedChannel" @click="untrackChannel" class="p-1 text-gray-400 hover:text-orange-500" v-tooltip="'Untrack channel'">
                     <UserMinus class="w-4 h-4" />
                 </button>
                 <template v-else>
-                    <button v-if="isAdmin" @click="trackChannel" class="p-1 text-gray-400 hover:text-green-500" v-tooltip="'Track channel'">
+                    <button @click="trackChannel" class="p-1 text-gray-400 hover:text-green-500" v-tooltip="'Track channel'">
                         <UserPlus class="w-4 h-4" />
                     </button>
-                    <button v-if="isAdmin" @click="blacklistChannel" class="p-1 text-gray-400 hover:text-red-500" v-tooltip="'Blacklist'">
+                    <button @click="blacklistChannel" class="p-1 text-gray-400 hover:text-red-500" v-tooltip="'Blacklist'">
                         <ShieldBan class="w-4 h-4" />
                     </button>
                 </template>
@@ -170,16 +168,16 @@ function trackChannel() {
                     <ExternalLink class="w-3.5 h-3.5" />
                     Watch
                 </a>
-                <button v-if="isAdmin && isTrackedChannel" @click="untrackChannel" class="flex items-center gap-1 px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-50 hover:text-orange-600 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-orange-400 rounded-md transition-colors">
+                <button v-if="isTrackedChannel" @click="untrackChannel" class="flex items-center gap-1 px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-50 hover:text-orange-600 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-orange-400 rounded-md transition-colors">
                     <UserMinus class="w-3.5 h-3.5" />
                     Untrack
                 </button>
                 <template v-else>
-                    <button v-if="isAdmin" @click="trackChannel" class="flex items-center gap-1 px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-50 hover:text-green-600 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-green-400 rounded-md transition-colors">
+                    <button @click="trackChannel" class="flex items-center gap-1 px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-50 hover:text-green-600 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-green-400 rounded-md transition-colors">
                         <UserPlus class="w-3.5 h-3.5" />
                         Track
                     </button>
-                    <button v-if="isAdmin" @click="blacklistChannel" class="flex items-center gap-1 px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-50 hover:text-red-600 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-red-400 rounded-md transition-colors">
+                    <button @click="blacklistChannel" class="flex items-center gap-1 px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-50 hover:text-red-600 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-red-400 rounded-md transition-colors">
                         <ShieldBan class="w-3.5 h-3.5" />
                         Block
                     </button>

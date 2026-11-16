@@ -11,7 +11,7 @@ class HistoryController extends Controller
 {
     public function index(Request $request): Response
     {
-        $query = HistoryEvent::orderByDesc('created_at');
+        $query = HistoryEvent::ownedBy($request->user())->orderByDesc('created_at');
 
         if ($request->filled('type')) {
             $query->ofType($request->input('type'));
@@ -38,9 +38,9 @@ class HistoryController extends Controller
         ]);
     }
 
-    public function clear(): \Illuminate\Http\RedirectResponse
+    public function clear(Request $request): \Illuminate\Http\RedirectResponse
     {
-        HistoryEvent::truncate();
+        HistoryEvent::ownedBy($request->user())->delete();
 
         return back()->with('success', 'History cleared.');
     }

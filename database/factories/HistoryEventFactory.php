@@ -3,15 +3,19 @@
 namespace Database\Factories;
 
 use App\Models\HistoryEvent;
+use Database\Factories\Concerns\HasOwner;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 class HistoryEventFactory extends Factory
 {
+    use HasOwner;
+
     protected $model = HistoryEvent::class;
 
     public function definition(): array
     {
         return [
+            'owner_id' => $this->defaultOwner(),
             'type' => fake()->randomElement(['stream_online', 'stream_offline', 'alert_triggered']),
             'stream_twitch_id' => (string) fake()->numberBetween(100000, 9999999),
             'streamer_login' => fake()->userName(),

@@ -22,8 +22,8 @@ const tabs = computed(() => [
     { name: 'History', href: '/history', match: '/history', icon: Clock, count: null },
     ...(isAdmin.value ? [
         { name: 'Users', href: '/users', match: '/users', icon: Users, count: null },
-        { name: 'Settings', href: '/settings', match: '/settings', icon: Settings, count: null },
     ] : []),
+    { name: 'Settings', href: '/settings', match: '/settings', icon: Settings, count: null },
 ]);
 
 function isActive(match: string): boolean {

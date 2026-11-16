@@ -26,13 +26,10 @@ class SetupCommand extends Command
         // Run migrations
         $this->call('migrate', ['--force' => true]);
 
-        // Seed default settings
+        // Seed default installation settings. Filters and appearance belong
+        // to each account and start from their built-in defaults.
         $defaults = [
-            'theme' => 'system',
             'sync_frequency_minutes' => '5',
-            'global_min_viewers' => '0',
-            'global_languages' => '[]',
-            'global_keywords' => '[]',
         ];
 
         foreach ($defaults as $key => $value) {

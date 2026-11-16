@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\AlertRule;
+use App\Models\Category;
 use App\Models\HistoryEvent;
 use App\Models\Setting;
 use App\Models\Stream;
@@ -12,8 +13,8 @@ use Illuminate\Support\Facades\Mail;
 
 test('an invalid stored template falls back to the default format instead of crashing', function () {
     Http::fake();
-    Setting::set('webhook_url', 'https://ntfy.example.com/topic');
-    Setting::set('webhook_format', 'ntfy');
+    setAccountSetting('webhook_url', 'https://ntfy.example.com/topic');
+    setAccountSetting('webhook_format', 'ntfy');
 
     $rule = AlertRule::factory()->withWebhook()->create([
         'notification_template' => ['version' => 2, 'blocks' => 'broken'],
@@ -31,8 +32,8 @@ test('one failing provider does not stop the others', function () {
 
     // A webhook pointed at a private address will fail SSRF validation, but
     // e-mail must still go out.
-    Setting::set('webhook_url', 'http://127.0.0.1/hook');
-    Setting::set('mail_to', 'me@example.com');
+    setAccountSetting('webhook_url', 'http://127.0.0.1/hook');
+    setAccountSetting('mail_to', 'me@example.com');
     Setting::set('smtp_host', 'smtp.example.com');
 
     $rule = AlertRule::factory()->withWebhook()->withEmail()->create();
@@ -53,6 +54,8 @@ test('a notification failure never aborts the sync bookkeeping', function () {
     $this->mock(AlertService::class, function ($mock) {
         $mock->shouldReceive('sendNotifications')->andThrow(new RuntimeException('provider exploded'));
     });
+
+    Category::factory()->create(); // an account that tracks something
 
     app(SyncService::class)->sync();
 

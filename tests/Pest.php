@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\User;
+use App\Models\UserSetting;
 use App\Services\Http\OutboundUrlGuard;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -19,6 +20,26 @@ uses(TestCase::class, RefreshDatabase::class)
 uses()->beforeEach(function () {
     $this->actingAs(User::factory()->admin()->create());
 })->in('Feature/Controllers', 'Feature/Middleware', 'Feature/E2E');
+
+/**
+ * The account that factories give their data to unless told otherwise: the
+ * signed-in user, else the first account, else a new one.
+ */
+function testOwner(): User
+{
+    return auth()->user() ?? User::query()->orderBy('id')->first() ?? User::factory()->create();
+}
+
+/** A setting of one account (default filters, appearance, alert destinations). */
+function setAccountSetting(string $key, mixed $value, ?User $user = null): void
+{
+    UserSetting::set($user ?? testOwner(), $key, $value);
+}
+
+function getAccountSetting(string $key, mixed $default = null, ?User $user = null): mixed
+{
+    return UserSetting::get($user ?? testOwner(), $key, $default);
+}
 
 function adminUser(array $attributes = []): User
 {

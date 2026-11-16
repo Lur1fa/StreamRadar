@@ -4,9 +4,16 @@ import { useForm, router, Link } from '@inertiajs/vue3';
 import { Key, RefreshCw, Filter, Mail, Palette, Terminal, X, Plus, MessageCircle, Lock, Webhook, Download, Upload, Send, Loader2, BotMessageSquare, ArrowUpCircle } from 'lucide-vue-next';
 import AppLayout from '@/layouts/AppLayout.vue';
 import { useTheme } from '@/composables/useTheme';
+import { useAuth } from '@/composables/useAuth';
 
-const props = defineProps<{ settings: Record<string, any>; activeCategoriesCount: number; webhookAllowedHosts: string[] }>();
+const props = defineProps<{ settings: Record<string, any>; activeCategoriesCount: number; webhookAllowedHosts: string[]; emailAvailable: boolean }>();
 const { theme: currentTheme, setTheme } = useTheme();
+const { isAdmin } = useAuth();
+
+// Settings of the installation (Twitch keys, scanning, SMTP server) are shared
+// by all accounts and only an administrator sees or sends them. Everything
+// else on this page belongs to the signed-in account.
+const SERVER_FIELDS = ['twitch_client_id', 'twitch_client_secret', 'auto_sync_enabled', 'sync_frequency_minutes', 'smtp_host', 'smtp_port', 'smtp_username', 'smtp_password', 'smtp_encryption', 'mail_from_address', 'mail_from_name'];
 
 const form = useForm({
     twitch_client_id: props.settings.twitch_client_id || '',
@@ -37,6 +44,10 @@ const form = useForm({
     notifications_webhook_enabled: props.settings.notifications_webhook_enabled !== '0',
     clear_secrets: [] as string[],
 });
+
+form.transform((data) => isAdmin.value
+    ? data
+    : Object.fromEntries(Object.entries(data).filter(([key]) => !SERVER_FIELDS.includes(key))) as typeof data);
 
 // Secrets are never sent to the browser. The server only tells us whether a
 // value is stored (`<key>_set`) and a mask (`<key>_masked`). Leaving a secret
@@ -167,19 +178,19 @@ async function checkForUpdate() {
 }
 
 // Sidebar scroll spy
-const activeSection = ref('twitch');
+const activeSection = ref(isAdmin.value ? 'twitch' : 'filters');
 const sections = [
-    { id: 'twitch', label: 'Twitch API', icon: Key },
-    { id: 'sync', label: 'Scanning', icon: RefreshCw },
+    { id: 'twitch', label: 'Twitch API', icon: Key, adminOnly: true },
+    { id: 'sync', label: 'Scanning', icon: RefreshCw, adminOnly: true },
     { id: 'filters', label: 'Global Filters', icon: Filter },
-    { id: 'email', label: 'Email / SMTP', icon: Mail },
+    { id: 'email', label: isAdmin.value ? 'Email / SMTP' : 'Email', icon: Mail },
     { id: 'discord', label: 'Discord', icon: MessageCircle },
     { id: 'telegram', label: 'Telegram', icon: BotMessageSquare },
     { id: 'webhook', label: 'Webhook', icon: Webhook },
-    { id: 'auth', label: 'Access', icon: Lock },
-    { id: 'backup', label: 'Backup', icon: Download },
+    { id: 'auth', label: 'Access', icon: Lock, adminOnly: true },
+    { id: 'backup', label: 'Backup', icon: Download, adminOnly: true },
     { id: 'appearance', label: 'Appearance', icon: Palette },
-];
+].filter((section) => !section.adminOnly || isAdmin.value);
 
 function scrollTo(id: string) {
     activeSection.value = id;
@@ -187,7 +198,7 @@ function scrollTo(id: string) {
 }
 
 onMounted(() => {
-    checkForUpdate();
+    if (isAdmin.value) checkForUpdate();
     const observer = new IntersectionObserver((entries) => {
         for (const entry of entries) {
             if (entry.isIntersecting) {
@@ -253,11 +264,12 @@ onMounted(() => {
                     </div>
                 </div>
 
-                <!-- Twitch API -->
-                <div id="section-twitch" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
+                <!-- Twitch API (installation) -->
+                <div v-if="isAdmin" id="section-twitch" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
                     <div class="flex items-center gap-2 mb-4">
                         <Key class="w-5 h-5 text-purple-500" />
                         <h3 class="text-lg font-bold text-gray-900 dark:text-white">Twitch API</h3>
+                        <span class="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400" v-tooltip="'Shared by every account. Only administrators can change it.'">all accounts</span>
                     </div>
                     <div class="space-y-4">
                         <div>
@@ -282,12 +294,13 @@ onMounted(() => {
                     </div>
                 </div>
 
-                <!-- Sync -->
-                <div id="section-sync" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
+                <!-- Sync (installation) -->
+                <div v-if="isAdmin" id="section-sync" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
                     <div class="flex items-center justify-between mb-4">
                         <div class="flex items-center gap-2">
                             <RefreshCw class="w-5 h-5 text-purple-500" />
                             <h3 class="text-lg font-bold text-gray-900 dark:text-white">Auto Scanning</h3>
+                            <span class="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400" v-tooltip="'Shared by every account. Only administrators can change it.'">all accounts</span>
                         </div>
                         <label class="flex items-center gap-2 cursor-pointer">
                             <input type="checkbox" v-model="form.auto_sync_enabled" class="rounded text-purple-600 focus:ring-purple-500 bg-white dark:bg-zinc-800" />
@@ -339,7 +352,7 @@ onMounted(() => {
                         <Filter class="w-5 h-5 text-purple-500" />
                         <h3 class="text-lg font-bold text-gray-900 dark:text-white">Global Filters</h3>
                     </div>
-                    <p class="text-xs text-gray-500 dark:text-zinc-500 mb-4">Default filters for categories using global settings.</p>
+                    <p class="text-xs text-gray-500 dark:text-zinc-500 mb-4">Your default filters, applied to your categories that use global settings.</p>
                     <div class="space-y-4">
                         <div class="grid grid-cols-2 gap-4">
                             <div>
@@ -387,19 +400,27 @@ onMounted(() => {
                     <div class="flex items-center justify-between mb-4">
                         <div class="flex items-center gap-2">
                             <Mail class="w-5 h-5 text-purple-500" />
-                            <h3 class="text-lg font-bold text-gray-900 dark:text-white">Email / SMTP</h3>
+                            <h3 class="text-lg font-bold text-gray-900 dark:text-white">Email</h3>
                         </div>
                         <label class="flex items-center gap-2">
                             <input type="checkbox" v-model="form.notifications_email_enabled" class="rounded text-purple-600 focus:ring-purple-500 bg-white dark:bg-zinc-800" />
                             <span class="text-xs font-medium text-gray-500 dark:text-zinc-400">Enabled</span>
                         </label>
                     </div>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                            <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Recipient Email</label>
-                            <input v-model="form.mail_to" type="email" placeholder="you@example.com"
-                                class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
-                        </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Recipient Email</label>
+                        <input v-model="form.mail_to" type="email" placeholder="you@example.com"
+                            class="w-full sm:w-1/2 px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                        <p class="text-[11px] text-gray-400 dark:text-zinc-600 mt-1">Where your alert e-mails are sent.</p>
+                        <p v-if="!emailAvailable" class="text-[11px] text-amber-600 dark:text-amber-400 mt-1">
+                            {{ isAdmin ? 'No SMTP server is set yet, so no e-mail can be sent.' : 'E-mail delivery is not set up on this server yet. Ask an administrator.' }}
+                        </p>
+                    </div>
+                    <div v-if="isAdmin" class="flex items-center gap-2 mt-5 mb-3 pt-4 border-t border-gray-100 dark:border-zinc-800">
+                        <span class="text-sm font-semibold text-gray-900 dark:text-white">SMTP server</span>
+                        <span class="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400" v-tooltip="'Shared by every account. Only administrators can change it.'">all accounts</span>
+                    </div>
+                    <div v-if="isAdmin" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">SMTP Host</label>
                             <input v-model="form.smtp_host" type="text" placeholder="smtp.example.com"
@@ -567,8 +588,8 @@ onMounted(() => {
                     </div>
                 </div>
 
-                <!-- Access / Auth -->
-                <div id="section-auth" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
+                <!-- Access / Auth (installation) -->
+                <div v-if="isAdmin" id="section-auth" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
                     <div class="flex items-center gap-2 mb-4">
                         <Lock class="w-5 h-5 text-purple-500" />
                         <h3 class="text-lg font-bold text-gray-900 dark:text-white">Access Control</h3>
@@ -588,13 +609,13 @@ onMounted(() => {
                     </div>
                 </div>
 
-                <!-- Backup -->
-                <div id="section-backup" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
+                <!-- Backup (administrators) -->
+                <div v-if="isAdmin" id="section-backup" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
                     <div class="flex items-center gap-2 mb-4">
                         <Download class="w-5 h-5 text-purple-500" />
                         <h3 class="text-lg font-bold text-gray-900 dark:text-white">Backup</h3>
                     </div>
-                    <p class="text-xs text-gray-500 dark:text-zinc-500 mb-4">Export or import all settings, tracked categories, channels, and blacklist rules.</p>
+                    <p class="text-xs text-gray-500 dark:text-zinc-500 mb-4">Export or import the installation settings and your own account's settings, tracked categories, channels, blacklist and alerts. Other accounts' data is not included. Secrets are never exported.</p>
                     <div class="flex gap-3">
                         <button @click="exportConfig"
                             class="px-4 py-2 text-sm font-medium bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-zinc-300 rounded-lg hover:bg-gray-200 dark:hover:bg-zinc-700 transition-colors flex items-center gap-1.5">

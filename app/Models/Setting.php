@@ -10,13 +10,14 @@ use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Key/value application settings.
+ * Key/value settings of the installation (SERVER_KEYS, administrators only).
+ * Settings that belong to one account (ACCOUNT_KEYS) live in UserSetting.
  *
  * Secret keys (see SECRET_KEYS) are encrypted at rest with APP_KEY, cached
  * only in their encrypted form, never exported, and only ever leave the
  * server as a mask (see mask()). Everything that reads a secret must go
- * through Setting::get(); everything that ships settings to a browser must
- * go through Setting::publicView().
+ * through Setting::get() / UserSetting::get(); everything that ships
+ * settings to a browser must go through publicView().
  */
 class Setting extends Model
 {
@@ -40,18 +41,12 @@ class Setting extends Model
         'setup_token_expires_at',
     ];
 
-    /** User-editable settings (everything the Settings page can read or write). */
-    public const MANAGED_KEYS = [
+    /** Installation-wide settings; only administrators can read or write them. */
+    public const SERVER_KEYS = [
         'twitch_client_id',
         'twitch_client_secret',
         'auto_sync_enabled',
         'sync_frequency_minutes',
-        'global_min_viewers',
-        'global_min_avg_viewers',
-        'global_languages',
-        'global_keywords',
-        'theme',
-        'mail_to',
         'smtp_host',
         'smtp_port',
         'smtp_username',
@@ -59,6 +54,19 @@ class Setting extends Model
         'smtp_encryption',
         'mail_from_address',
         'mail_from_name',
+    ];
+
+    /**
+     * Settings every account has for itself (stored in UserSetting): default
+     * filters, appearance, and where that account's alerts are delivered.
+     */
+    public const ACCOUNT_KEYS = [
+        'global_min_viewers',
+        'global_min_avg_viewers',
+        'global_languages',
+        'global_keywords',
+        'theme',
+        'mail_to',
         'discord_webhook_url',
         'telegram_bot_token',
         'telegram_chat_id',
@@ -69,6 +77,43 @@ class Setting extends Model
         'notifications_telegram_enabled',
         'notifications_webhook_enabled',
     ];
+
+    /** Everything the Settings page can read or write. */
+    public const MANAGED_KEYS = [...self::SERVER_KEYS, ...self::ACCOUNT_KEYS];
+
+    /** Values used while nothing is stored. */
+    public const DEFAULTS = [
+        'sync_frequency_minutes' => '1',
+        'global_min_viewers' => '0',
+        'global_min_avg_viewers' => '0',
+        'global_languages' => '[]',
+        'global_keywords' => '[]',
+        'theme' => 'system',
+        'webhook_format' => 'json',
+    ];
+
+    public static function isAccountKey(string $key): bool
+    {
+        return in_array($key, self::ACCOUNT_KEYS, true);
+    }
+
+    /**
+     * Store managed settings on behalf of an account: its own settings go to
+     * the account, installation settings to the shared store, and the latter
+     * only ever for an administrator. Anything else is ignored.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    public static function storeFor(User $user, array $data): void
+    {
+        foreach ($data as $key => $value) {
+            if (self::isAccountKey($key)) {
+                UserSetting::set($user, $key, $value);
+            } elseif ($user->isAdmin() && in_array($key, self::SERVER_KEYS, true)) {
+                static::set($key, $value);
+            }
+        }
+    }
 
     public static function isSecret(string $key): bool
     {
@@ -94,27 +139,37 @@ class Setting extends Model
             return $default;
         }
 
-        $value = $stored['v'];
+        return self::fromStorage($key, $stored['v']) ?? $default;
+    }
 
-        if (self::isSecret($key)) {
-            return self::decryptSecret($key, $value) ?? $default;
+    public static function set(string $key, mixed $value): void
+    {
+        static::updateOrCreate(
+            ['key' => $key],
+            ['value' => self::toStorage($key, $value)],
+        );
+
+        Cache::forget("setting.{$key}");
+    }
+
+    /** Encrypt secrets on the way into the database. */
+    public static function toStorage(string $key, mixed $value): mixed
+    {
+        if (self::isSecret($key) && $value !== null && $value !== '') {
+            return Crypt::encryptString((string) $value);
         }
 
         return $value;
     }
 
-    public static function set(string $key, mixed $value): void
+    /** Decrypt secrets on the way out; null when a secret cannot be decrypted. */
+    public static function fromStorage(string $key, mixed $value): mixed
     {
-        if (self::isSecret($key) && $value !== null && $value !== '') {
-            $value = Crypt::encryptString((string) $value);
+        if ($value !== null && self::isSecret($key)) {
+            return self::decryptSecret($key, (string) $value);
         }
 
-        static::updateOrCreate(
-            ['key' => $key],
-            ['value' => $value],
-        );
-
-        Cache::forget("setting.{$key}");
+        return $value;
     }
 
     public static function forget(string $key): void
@@ -153,7 +208,11 @@ class Setting extends Model
      */
     public static function mask(string $key): ?string
     {
-        $value = static::get($key);
+        return self::maskValue($key, static::get($key));
+    }
+
+    public static function maskValue(string $key, mixed $value): ?string
+    {
         if ($value === null || $value === '') {
             return null;
         }

@@ -101,7 +101,7 @@ function formatDate(iso: string | null): string {
                         <p v-else-if="sso.passwordOptional" class="text-xs text-gray-500 dark:text-zinc-500 mt-1">Leave empty for an account that can only sign in with SSO. Use the same e-mail as at the provider.</p>
                     </div>
                 </div>
-                <p class="text-xs text-gray-500 dark:text-zinc-500"><strong>admin</strong> can change settings, users and tracking; <strong>user</strong> can only view.</p>
+                <p class="text-xs text-gray-500 dark:text-zinc-500">Every account has its own tracking, alerts, blacklist and history. An <strong>admin</strong> can also change the app settings (Twitch API, scanning, SMTP server) and manage users.</p>
                 <button type="submit" :disabled="form.processing" class="px-4 py-2 text-sm font-medium bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors">Create user</button>
             </form>
 
@@ -160,10 +160,10 @@ function formatDate(iso: string | null): string {
             </div>
 
             <p class="mt-4 text-xs text-gray-400 dark:text-zinc-600">
-                Accounts can also be managed from the command line: <code>php artisan user:create --admin</code>, <code>user:password</code>, <code>user:role</code>, <code>user:list</code>.
+                Accounts can also be managed from the command line: <code>php artisan user:create --admin</code>, <code>user:password</code>, <code>user:role</code>, <code>user:list</code>. To move one account's data to another account: <code>user:move-data</code>.
             </p>
         </div>
 
-        <ConfirmModal :show="!!deleting" title="Delete user?" :message="`${deleting?.name} will no longer be able to sign in.`" confirm-label="Delete" @confirm="confirmDelete" @cancel="deleting = null" />
+        <ConfirmModal :show="!!deleting" title="Delete user?" :message="`${deleting?.name} will no longer be able to sign in. Their tracking, alerts, blacklist and history are deleted too.`" confirm-label="Delete" @confirm="confirmDelete" @cancel="deleting = null" />
     </AppLayout>
 </template>

@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import { useAuth } from '@/composables/useAuth';
-const { isAdmin } = useAuth();
 import { ref } from 'vue';
 import { router } from '@inertiajs/vue3';
 import { Search, Clock, Radio, WifiOff, Bell, RefreshCw, Trash2, Eye } from 'lucide-vue-next';
@@ -74,7 +72,7 @@ const types = Object.keys(typeConfig);
     <AppLayout>
         <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
             <h2 class="text-xl font-bold text-gray-900 dark:text-white">History</h2>
-            <button v-if="isAdmin && events.total > 0" @click="showClearConfirm = true"
+            <button v-if="events.total > 0" @click="showClearConfirm = true"
                 class="px-3 py-1.5 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors flex items-center gap-1.5">
                 <Trash2 class="w-4 h-4" /> Clear All
             </button>

@@ -27,7 +27,7 @@ class UserDeleteCommand extends Command
             return self::FAILURE;
         }
 
-        if (! $this->option('force') && ! $this->confirm("Delete {$user->email} ({$user->role})?")) {
+        if (! $this->option('force') && ! $this->confirm("Delete {$user->email} ({$user->role}) together with its tracking, alerts, blacklist and history?")) {
             return self::SUCCESS;
         }
 

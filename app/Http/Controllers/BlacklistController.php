@@ -15,9 +15,10 @@ class BlacklistController extends Controller
     {
         $tab = $request->input('tab', 'channels');
 
-        $channels = BlacklistRule::channels()->orderByDesc('created_at')->get();
-        $keywords = BlacklistRule::keywords()->orderByDesc('created_at')->get();
-        $tags = BlacklistRule::tags()->orderByDesc('created_at')->get();
+        $user = $request->user();
+        $channels = BlacklistRule::ownedBy($user)->channels()->orderByDesc('created_at')->get();
+        $keywords = BlacklistRule::ownedBy($user)->keywords()->orderByDesc('created_at')->get();
+        $tags = BlacklistRule::ownedBy($user)->tags()->orderByDesc('created_at')->get();
 
         return Inertia::render('Blacklist', [
             'channels' => $channels,
@@ -52,16 +53,19 @@ class BlacklistController extends Controller
             }
         }
 
-        BlacklistRule::updateOrCreate(
+        $user = $request->user();
+
+        BlacklistRule::updateOrCreateFor(
+            $user,
             ['type' => $validated['type'], 'value' => $value],
             $extra,
         );
 
-        // Remove existing streams matching this blacklist rule
+        // Remove this account's existing streams matching the blacklist rule
         match ($validated['type']) {
-            'channel' => Stream::where('user_login', $value)->delete(),
-            'keyword' => Stream::where('title', 'like', '%'.strtolower($value).'%')->delete(),
-            'tag' => Stream::whereJsonContains('tags', $value)->delete(),
+            'channel' => Stream::ownedBy($user)->where('user_login', $value)->delete(),
+            'keyword' => Stream::ownedBy($user)->where('title', 'like', '%'.strtolower($value).'%')->delete(),
+            'tag' => Stream::ownedBy($user)->whereJsonContains('tags', $value)->delete(),
         };
 
         // If called from blacklist page, redirect to correct tab; otherwise stay on current page

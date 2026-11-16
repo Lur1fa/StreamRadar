@@ -2,11 +2,15 @@
 
 namespace App\Models;
 
+use App\Services\AccountDataService;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\Log;
+use Throwable;
 
 class User extends Authenticatable
 {
@@ -44,6 +48,69 @@ class User extends Authenticatable
             'disabled_at' => 'datetime',
             'password' => 'hashed',
         ];
+    }
+
+    protected static function booted(): void
+    {
+        // An installation upgraded from the time all data was shared, with no
+        // account yet, has data without an owner. The first administrator
+        // takes it over. A no-op in every other case.
+        static::saved(function (User $user) {
+            if (! $user->isAdmin() || ! ($user->wasRecentlyCreated || $user->wasChanged('role'))) {
+                return;
+            }
+
+            try {
+                $accounts = app(AccountDataService::class);
+                if ($accounts->hasOrphans()) {
+                    $accounts->adoptOrphans($user);
+                }
+            } catch (Throwable $e) {
+                Log::warning('Could not assign existing data to the new administrator.', ['exception' => $e::class]);
+            }
+        });
+    }
+
+    // ── Data owned by the account ────────────────────────────────────────
+
+    public function categories(): HasMany
+    {
+        return $this->hasMany(Category::class, 'owner_id');
+    }
+
+    public function tagFilters(): HasMany
+    {
+        return $this->hasMany(TagFilter::class, 'owner_id');
+    }
+
+    public function trackedChannels(): HasMany
+    {
+        return $this->hasMany(TrackedChannel::class, 'owner_id');
+    }
+
+    public function blacklistRules(): HasMany
+    {
+        return $this->hasMany(BlacklistRule::class, 'owner_id');
+    }
+
+    public function alertRules(): HasMany
+    {
+        return $this->hasMany(AlertRule::class, 'owner_id');
+    }
+
+    public function historyEvents(): HasMany
+    {
+        return $this->hasMany(HistoryEvent::class, 'owner_id');
+    }
+
+    public function streams(): HasMany
+    {
+        return $this->hasMany(Stream::class, 'owner_id');
+    }
+
+    public function settings(): HasMany
+    {
+        return $this->hasMany(UserSetting::class);
     }
 
     public function isAdmin(): bool

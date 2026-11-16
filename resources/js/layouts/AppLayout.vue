@@ -15,7 +15,7 @@ const appSettings = computed(() => page.props.appSettings);
 const stats = computed(() => page.props.stats);
 const syncing = ref(false);
 const mobileMenuOpen = ref(false);
-const { user, isAdmin } = useAuth();
+const { user } = useAuth();
 
 function triggerSync() {
     syncing.value = true;
@@ -79,7 +79,6 @@ function formatLastSync(iso: string | null): string {
                             {{ formatLastSync(appSettings?.last_sync_at ?? null) }}
                         </span>
                         <button
-                            v-if="isAdmin"
                             @click="triggerSync"
                             :disabled="syncing"
                             class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-all

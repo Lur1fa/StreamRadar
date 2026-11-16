@@ -99,6 +99,7 @@ Route::middleware(['auth', 'can:admin'])->group(function () {
     // Users
     Route::get('/users', [UserController::class, 'index'])->name('users.index');
     Route::post('/users', [UserController::class, 'store'])->name('users.store');
+    Route::put('/users/sso', [UserController::class, 'updateSso'])->name('users.sso'); // must precede /users/{user}
     Route::put('/users/{user}', [UserController::class, 'update'])->name('users.update');
     Route::delete('/users/{user}', [UserController::class, 'destroy'])->name('users.destroy');
 

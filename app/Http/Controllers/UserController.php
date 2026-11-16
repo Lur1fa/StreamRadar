@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Services\Auth\OidcService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -16,33 +17,63 @@ use Inertia\Response;
  */
 class UserController extends Controller
 {
-    public function index(): Response
+    public function index(OidcService $oidc): Response
     {
         return Inertia::render('Users', [
             'users' => User::orderBy('name')->get()->map->toPublicArray()->values(),
             'roles' => User::ROLES,
             'passwordMinLength' => (int) config('security.password_min_length', 12),
+            'sso' => [
+                'enabled' => $oidc->isConfigured(),
+                'autoProvision' => $oidc->autoProvisionEnabled(),
+                'passwordOptional' => $oidc->linksAccountsByEmail(),
+            ],
         ]);
     }
 
-    public function store(Request $request): RedirectResponse
+    /**
+     * Whether signing in through SSO for the first time creates an account.
+     */
+    public function updateSso(Request $request, OidcService $oidc): RedirectResponse
     {
+        $data = $request->validate([
+            'auto_provision' => ['required', 'boolean'],
+        ]);
+
+        $enabled = (bool) $data['auto_provision'];
+        $oidc->setAutoProvision($enabled);
+
+        return back()->with('success', $enabled
+            ? 'New people signing in with SSO now get an account automatically.'
+            : 'Automatic account creation is off. Only existing accounts can sign in with SSO.');
+    }
+
+    public function store(Request $request, OidcService $oidc): RedirectResponse
+    {
+        // An account without a password can only be used through SSO, so the
+        // password may be left out only when SSO will pick the account up.
+        $passwordOptional = $oidc->linksAccountsByEmail();
+
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'string', 'email:rfc', 'max:255', Rule::unique('users', 'email')],
             'role' => ['required', Rule::in(User::ROLES)],
-            'password' => ['required', 'string', Password::min((int) config('security.password_min_length', 12))],
+            'password' => [$passwordOptional ? 'nullable' : 'required', 'string', Password::min((int) config('security.password_min_length', 12))],
         ]);
+
+        $password = $data['password'] ?? null;
 
         User::create([
             'name' => $data['name'],
             'email' => strtolower($data['email']),
             'role' => $data['role'],
-            'password' => $data['password'],
+            'password' => $password,
             'email_verified_at' => now(),
         ]);
 
-        return back()->with('success', "User \"{$data['name']}\" created.");
+        return back()->with('success', $password === null
+            ? "User \"{$data['name']}\" created. They sign in with SSO."
+            : "User \"{$data['name']}\" created.");
     }
 
     public function update(Request $request, User $user): RedirectResponse

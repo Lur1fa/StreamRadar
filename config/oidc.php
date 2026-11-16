@@ -40,6 +40,8 @@ return [
     // Create a StreamRadar account on first successful SSO login. When false,
     // only accounts that already exist (created via CLI or the Users page and
     // matched by verified e-mail) may sign in through the provider.
+    // This is the starting value of the switch on the Users page; once an
+    // administrator has used that switch, their choice wins.
     'auto_provision' => filter_var(env('OIDC_AUTO_PROVISION', true), FILTER_VALIDATE_BOOLEAN),
 
     // Link an SSO identity to an existing local account with the same e-mail

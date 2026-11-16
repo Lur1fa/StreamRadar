@@ -229,6 +229,8 @@ OIDC_ADMIN_VALUES=streamradar-admins
 
 Group mapping only works if the provider sends the claim. If it needs its own scope (Authelia: `groups`), request it with `OIDC_SCOPES="openid profile email groups"` and allow that scope on the client. The role is re-evaluated on every sign-in.
 
+By default, anyone who signs in through the provider gets a read-only account on first sign-in. Admins can turn that off on the **Users** page (or set `OIDC_AUTO_PROVISION=false` as the starting value); after that only people who already have an account can use SSO. To add someone, create the account on the Users page with the e-mail address they have at the provider; the password can be left empty for an account that signs in with SSO only.
+
 The redirect URI is `https://your-host/auth/oidc/callback`. SSO is additive: local password login stays available (set `AUTH_LOCAL_LOGIN=false` to require SSO), and the `user:*` commands always work, so an unreachable identity provider never locks admins out.
 
 **Lockout protection.** Failed logins are rate-limited per account (progressive lockout) and per IP. Passwords are bcrypt-hashed with a configurable minimum length (`AUTH_PASSWORD_MIN_LENGTH`, default 12).

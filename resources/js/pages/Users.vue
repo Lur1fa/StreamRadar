@@ -7,7 +7,12 @@ import ConfirmModal from '@/components/ConfirmModal.vue';
 import { useAuth } from '@/composables/useAuth';
 import type { AuthUser, Role } from '@/types';
 
-const props = defineProps<{ users: AuthUser[]; roles: Role[]; passwordMinLength: number }>();
+const props = defineProps<{
+    users: AuthUser[];
+    roles: Role[];
+    passwordMinLength: number;
+    sso: { enabled: boolean; autoProvision: boolean; passwordOptional: boolean };
+}>();
 
 const page = usePage();
 const errors = computed(() => (page.props.errors ?? {}) as Record<string, string>);
@@ -23,6 +28,15 @@ function submit() {
 function setRole(u: AuthUser, role: Role) {
     if (u.role === role) return;
     router.put(`/users/${u.id}`, { role }, { preserveScroll: true });
+}
+
+const savingSso = ref(false);
+function setAutoProvision(enabled: boolean) {
+    router.put('/users/sso', { auto_provision: enabled }, {
+        preserveScroll: true,
+        onStart: () => { savingSso.value = true; },
+        onFinish: () => { savingSso.value = false; },
+    });
 }
 
 function toggleDisabled(u: AuthUser) {
@@ -81,14 +95,29 @@ function formatDate(iso: string | null): string {
                         </select>
                     </div>
                     <div>
-                        <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Initial password (min. {{ passwordMinLength }})</label>
-                        <input v-model="form.password" type="password" required autocomplete="new-password" class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                        <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Initial password ({{ sso.passwordOptional ? 'optional, ' : '' }}min. {{ passwordMinLength }})</label>
+                        <input v-model="form.password" type="password" :required="!sso.passwordOptional" autocomplete="new-password" class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
                         <p v-if="errors.password" class="text-xs text-red-500 mt-1">{{ errors.password }}</p>
+                        <p v-else-if="sso.passwordOptional" class="text-xs text-gray-500 dark:text-zinc-500 mt-1">Leave empty for an account that can only sign in with SSO. Use the same e-mail as at the provider.</p>
                     </div>
                 </div>
                 <p class="text-xs text-gray-500 dark:text-zinc-500"><strong>admin</strong> can change settings, users and tracking; <strong>user</strong> can only view.</p>
                 <button type="submit" :disabled="form.processing" class="px-4 py-2 text-sm font-medium bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors">Create user</button>
             </form>
+
+            <div v-if="sso.enabled" class="mb-6 bg-white dark:bg-zinc-900 rounded-xl px-5 py-4 shadow-sm dark:shadow-none">
+                <label class="flex items-start gap-3 cursor-pointer">
+                    <input type="checkbox" :checked="sso.autoProvision" :disabled="savingSso"
+                        @change="setAutoProvision(($event.target as HTMLInputElement).checked)"
+                        class="mt-0.5 rounded text-purple-600 focus:ring-purple-500 bg-white dark:bg-zinc-800 disabled:opacity-50" />
+                    <span>
+                        <span class="block text-sm font-medium text-gray-900 dark:text-white">Create accounts automatically on first SSO sign-in</span>
+                        <span class="block text-xs text-gray-500 dark:text-zinc-500 mt-0.5">
+                            When off, only people who already have an account here can sign in with SSO. Existing accounts are not affected.
+                        </span>
+                    </span>
+                </label>
+            </div>
 
             <div class="bg-white dark:bg-zinc-900 rounded-xl shadow-sm dark:shadow-none divide-y divide-gray-100 dark:divide-zinc-800">
                 <div v-for="u in users" :key="u.id" class="px-5 py-4">
@@ -98,6 +127,7 @@ function formatDate(iso: string | null): string {
                                 <span class="font-medium text-gray-900 dark:text-white truncate">{{ u.name }}</span>
                                 <span v-if="u.id === me?.id" class="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-300">you</span>
                                 <span v-if="u.sso" class="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-300">SSO</span>
+                                <span v-else-if="!u.has_password" class="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400" v-tooltip="'No password. Becomes usable on first SSO sign-in with this e-mail.'">awaiting SSO</span>
                                 <span v-if="u.disabled" class="text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-300">disabled</span>
                             </div>
                             <div class="text-xs text-gray-500 dark:text-zinc-500 truncate">{{ u.email }} · last login {{ formatDate(u.last_login_at) }}</div>

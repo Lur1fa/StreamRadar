@@ -2,6 +2,7 @@
 
 namespace App\Services\Auth;
 
+use App\Models\Setting;
 use App\Models\User;
 use App\Support\Redactor;
 use Illuminate\Http\Request;
@@ -18,6 +19,9 @@ use Throwable;
  */
 class OidcService
 {
+    /** Settings key behind the Users page switch. Not part of config export/import. */
+    public const AUTO_PROVISION_SETTING = 'oidc_auto_provision';
+
     private const SESSION_KEY = 'oidc_flow';
 
     private const FLOW_TTL_SECONDS = 600;
@@ -45,6 +49,37 @@ class OidcService
     public function redirectUri(): string
     {
         return (string) (config('oidc.redirect_uri') ?: route('oidc.callback'));
+    }
+
+    /**
+     * Whether a first SSO sign-in may create an account. The switch on the
+     * Users page wins once an administrator has used it; until then
+     * OIDC_AUTO_PROVISION decides.
+     */
+    public function autoProvisionEnabled(): bool
+    {
+        $stored = Setting::get(self::AUTO_PROVISION_SETTING);
+
+        if ($stored === null || $stored === '') {
+            return (bool) config('oidc.auto_provision', true);
+        }
+
+        return filter_var($stored, FILTER_VALIDATE_BOOLEAN);
+    }
+
+    /**
+     * Whether an account created by an administrator is picked up by SSO on
+     * first sign-in (matched by provider-verified e-mail). Only then is an
+     * account without a local password of any use.
+     */
+    public function linksAccountsByEmail(): bool
+    {
+        return $this->isConfigured() && (bool) config('oidc.link_by_email', true);
+    }
+
+    public function setAutoProvision(bool $enabled): void
+    {
+        Setting::set(self::AUTO_PROVISION_SETTING, $enabled ? '1' : '0');
     }
 
     // ── Discovery ────────────────────────────────────────────────────────
@@ -327,7 +362,7 @@ class OidcService
         }
 
         if (! $user) {
-            if (! config('oidc.auto_provision', true)) {
+            if (! $this->autoProvisionEnabled()) {
                 throw new OidcException('Your account has not been provisioned. Ask an administrator to create it.');
             }
             if (! $identity->email) {

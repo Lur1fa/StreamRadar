@@ -230,6 +230,38 @@ test('auto-provisioning can be turned off so only known accounts may sign in', f
     expect(fn () => $service->resolveUser($identity))->toThrow(OidcException::class);
 });
 
+test('switching automatic account creation off on the Users page refuses unknown SSO users', function () {
+    $kp = oidcKeypair();
+    app()->instance('oidc_test_jwk', $kp['jwk']);
+    configureOidc($kp['jwk']);
+    app(OidcService::class)->setAutoProvision(false);
+
+    $store = freshStore();
+    $service = driveOidc($store, $kp['private']);
+    $callback = Request::create('/auth/oidc/callback', 'GET', ['state' => $store->get('__state'), 'code' => 'c']);
+    $callback->setLaravelSession($store);
+
+    $identity = $service->handleCallback($callback);
+    expect(fn () => $service->resolveUser($identity))->toThrow(OidcException::class, 'has not been provisioned');
+    expect(User::count())->toBe(0);
+});
+
+test('an existing account can still sign in with SSO when automatic creation is off', function () {
+    $kp = oidcKeypair();
+    app()->instance('oidc_test_jwk', $kp['jwk']);
+    configureOidc($kp['jwk']);
+    app(OidcService::class)->setAutoProvision(false);
+    $existing = User::factory()->create(['email' => 'alice@example.com', 'password' => null]);
+
+    $store = freshStore();
+    $service = driveOidc($store, $kp['private']);
+    $callback = Request::create('/auth/oidc/callback', 'GET', ['state' => $store->get('__state'), 'code' => 'c']);
+    $callback->setLaravelSession($store);
+
+    $user = $service->resolveUser($service->handleCallback($callback));
+    expect($user->is($existing))->toBeTrue()->and($user->oidc_subject)->toBe('subject-123');
+});
+
 test('group claims can map a user to the admin role', function () {
     $kp = oidcKeypair();
     app()->instance('oidc_test_jwk', $kp['jwk']);

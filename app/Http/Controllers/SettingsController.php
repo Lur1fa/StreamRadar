@@ -2,116 +2,77 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\UpdateSettingsRequest;
 use App\Models\AlertRule;
 use App\Models\BlacklistRule;
 use App\Models\Category;
 use App\Models\Setting;
 use App\Models\TagFilter;
 use App\Models\TrackedChannel;
+use App\Services\AlertService;
+use App\Services\ConfigImportService;
+use App\Services\Http\SafeHttpClient;
 use App\Services\TwitchApiService;
+use App\Support\Redactor;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
+use Throwable;
 
+/**
+ * All routes of this controller are administrator-only (see routes/web.php).
+ *
+ * Secret handling: secrets never leave the server. The page receives only
+ * `<key>_set` / `<key>_masked`; updates ignore empty or masked values; the
+ * export omits every secret; test endpoints return generic results.
+ */
 class SettingsController extends Controller
 {
-    private const SETTING_KEYS = [
-        'twitch_client_id',
-        'twitch_client_secret',
-        'auto_sync_enabled',
-        'sync_frequency_minutes',
-        'global_min_viewers',
-        'global_min_avg_viewers',
-        'global_languages',
-        'global_keywords',
-        'theme',
-        'mail_to',
-        'smtp_host',
-        'smtp_port',
-        'smtp_username',
-        'smtp_password',
-        'smtp_encryption',
-        'mail_from_address',
-        'mail_from_name',
-        'discord_webhook_url',
-        'telegram_bot_token',
-        'telegram_chat_id',
-        'webhook_url',
-        'webhook_format',
-        'notifications_email_enabled',
-        'notifications_discord_enabled',
-        'notifications_telegram_enabled',
-        'notifications_webhook_enabled',
-        'auth_username',
+    private const SETTING_DEFAULTS = [
+        'sync_frequency_minutes' => '1',
+        'global_min_viewers' => '0',
+        'global_min_avg_viewers' => '0',
+        'global_languages' => '[]',
+        'global_keywords' => '[]',
+        'theme' => 'system',
+        'webhook_format' => 'json',
     ];
 
     public function index(): Response
     {
-        $settings = Setting::getMany(self::SETTING_KEYS, [
-            'sync_frequency_minutes' => '1',
-            'global_min_viewers' => '0',
-            'global_min_avg_viewers' => '0',
-            'global_languages' => '[]',
-            'global_keywords' => '[]',
-            'theme' => 'system',
-            'webhook_format' => 'json',
-        ]);
-
-        // Mask secrets
-        if (! empty($settings['twitch_client_secret'])) {
-            $settings['twitch_client_secret_masked'] = str_repeat('*', 8).substr($settings['twitch_client_secret'], -4);
-        }
-        if (! empty($settings['telegram_bot_token'])) {
-            $settings['telegram_bot_token_masked'] = str_repeat('*', 8).substr($settings['telegram_bot_token'], -4);
-        }
-
-        $settings['auth_enabled'] = ! empty(Setting::get('auth_username')) && ! empty(Setting::get('auth_password'));
-
         return Inertia::render('Settings', [
-            'settings' => $settings,
+            'settings' => Setting::publicView(Setting::MANAGED_KEYS, self::SETTING_DEFAULTS),
             'activeCategoriesCount' => Category::where('is_active', true)->count(),
+            'webhookAllowedHosts' => (array) config('security.webhook.allowed_hosts', []),
         ]);
     }
 
-    public function update(Request $request): \Illuminate\Http\RedirectResponse
+    public function update(UpdateSettingsRequest $request): RedirectResponse
     {
-        $data = [];
+        $validated = $request->validated();
 
-        // Only include non-null values (ConvertEmptyStringsToNull turns '' into null)
-        foreach (self::SETTING_KEYS as $key) {
-            if ($request->has($key) && $request->input($key) !== null) {
-                $data[$key] = $request->input($key);
+        foreach ((array) $request->input('clear_secrets', []) as $key) {
+            if (Setting::isSecret($key)) {
+                Setting::forget($key);
             }
         }
 
-        // Don't overwrite secrets with masked versions
-        if (isset($data['twitch_client_secret']) && str_starts_with($data['twitch_client_secret'], '***')) {
-            unset($data['twitch_client_secret']);
-        }
-        if (isset($data['telegram_bot_token']) && str_starts_with($data['telegram_bot_token'], '***')) {
-            unset($data['telegram_bot_token']);
-        }
+        $data = UpdateSettingsRequest::normalize($validated);
 
-        // Remove webhook format if not supported formats
-        if (isset($data['webhook_format']) && ! in_array($data['webhook_format'], ['json', 'ntfy'], true)) {
-            unset($data['webhook_format']);
-        }
-
-        // Handle auth password separately (hash it)
-        $authPassword = $request->input('auth_password');
-        if ($authPassword) {
-            Setting::set('auth_password', Hash::make($authPassword));
-            // Keep current session authenticated so user isn't locked out
-            $request->session()->put('authenticated', true);
+        // Secrets: only overwrite when a new non-empty value was supplied.
+        foreach (Setting::SECRET_KEYS as $key) {
+            if (array_key_exists($key, $data) && ($data[$key] === null || $data[$key] === '')) {
+                unset($data[$key]);
+            }
         }
 
         Setting::setMany($data);
 
-        // Update mail config dynamically if SMTP settings changed
         if (array_intersect_key($data, array_flip(['smtp_host', 'smtp_port', 'smtp_username', 'smtp_password', 'smtp_encryption', 'mail_from_address', 'mail_from_name']))) {
             $this->updateMailConfig();
         }
@@ -119,30 +80,14 @@ class SettingsController extends Controller
         return back()->with('success', 'Settings saved.');
     }
 
-    public function disableAuth(Request $request): JsonResponse
-    {
-        $request->validate(['password' => 'required|string']);
-
-        $storedPassword = Setting::where('key', 'auth_password')->value('value');
-        if (! $storedPassword || ! Hash::check($request->input('password'), $storedPassword)) {
-            return response()->json(['message' => 'Invalid password'], 422);
-        }
-
-        Setting::where('key', 'auth_username')->delete();
-        Setting::where('key', 'auth_password')->delete();
-        \Illuminate\Support\Facades\Cache::forget('setting.auth_username');
-        \Illuminate\Support\Facades\Cache::forget('setting.auth_password');
-
-        return response()->json(['message' => 'Access control disabled']);
-    }
-
     public function export(): JsonResponse
     {
-        $settings = Setting::all()->pluck('value', 'key')->toArray();
-        unset($settings['auth_password']); // Don't export hashed password
-
         return response()->json([
-            'settings' => $settings,
+            'format' => 2,
+            'app' => 'StreamRadar',
+            'exported_at' => now()->toIso8601String(),
+            // Never includes secrets (Twitch secret, SMTP password, bot token, webhook URLs).
+            'settings' => Setting::exportable(),
             'categories' => Category::all(['twitch_id', 'name', 'box_art_url', 'is_active', 'notifications_enabled', 'use_global_filters', 'filter_source', 'min_viewers', 'min_avg_viewers', 'languages', 'keywords', 'tags'])->toArray(),
             'channels' => TrackedChannel::all(['twitch_user_id', 'user_login', 'user_name', 'profile_image_url', 'is_active'])->toArray(),
             'blacklist' => BlacklistRule::all(['type', 'value', 'twitch_user_id', 'profile_image_url'])->toArray(),
@@ -167,103 +112,51 @@ class SettingsController extends Controller
                     'notify_webhook' => $rule->notify_webhook,
                     'notify_on_category_change' => $rule->notify_on_category_change,
                     'notify_on_stream_start' => $rule->notify_on_stream_start,
+                    'notification_template' => $rule->notification_template,
                     'is_active' => $rule->is_active,
                 ];
             })->toArray(),
         ]);
     }
 
-    public function import(Request $request): \Illuminate\Http\RedirectResponse
+    public function import(Request $request, ConfigImportService $importer): RedirectResponse
     {
         $request->validate(['file' => 'required|file|mimes:json|max:1024']);
 
-        $data = json_decode(file_get_contents($request->file('file')->getRealPath()), true);
-        if (! $data) {
+        $raw = file_get_contents($request->file('file')->getRealPath());
+        $data = json_decode((string) $raw, true, 32);
+
+        if (! is_array($data)) {
             return back()->with('error', 'Invalid JSON file.');
         }
 
-        // Import settings (except auth)
-        if (! empty($data['settings'])) {
-            foreach ($data['settings'] as $key => $value) {
-                if (in_array($key, ['auth_username', 'auth_password'])) {
-                    continue;
-                }
-                Setting::set($key, $value);
-            }
+        try {
+            $counts = $importer->import($data);
+        } catch (ValidationException $e) {
+            $first = collect($e->errors())->flatten()->first();
+
+            return back()->with('error', 'Import rejected: '.$first);
         }
 
-        // Import categories
-        if (! empty($data['categories'])) {
-            foreach ($data['categories'] as $cat) {
-                Category::updateOrCreate(
-                    ['twitch_id' => $cat['twitch_id']],
-                    collect($cat)->except('twitch_id')->toArray(),
-                );
-            }
-        }
+        $summary = collect($counts)->filter()->map(fn ($n, $k) => "{$n} ".str_replace('_', ' ', $k))->implode(', ');
 
-        // Import channels
-        if (! empty($data['channels'])) {
-            foreach ($data['channels'] as $ch) {
-                TrackedChannel::updateOrCreate(
-                    ['twitch_user_id' => $ch['twitch_user_id']],
-                    collect($ch)->except('twitch_user_id')->toArray(),
-                );
-            }
-        }
-
-        // Import blacklist
-        if (! empty($data['blacklist'])) {
-            foreach ($data['blacklist'] as $rule) {
-                BlacklistRule::updateOrCreate(
-                    ['type' => $rule['type'], 'value' => $rule['value']],
-                    collect($rule)->except(['type', 'value'])->toArray(),
-                );
-            }
-        }
-
-        // Import tag filters
-        if (! empty($data['tag_filters'])) {
-            foreach ($data['tag_filters'] as $tf) {
-                TagFilter::updateOrCreate(
-                    ['tag' => $tf['tag']],
-                    collect($tf)->except('tag')->toArray(),
-                );
-            }
-        }
-
-        // Import alerts (map twitch_ids back to local category IDs)
-        if (! empty($data['alerts'])) {
-            $twitchToId = Category::pluck('id', 'twitch_id')->toArray();
-
-            foreach ($data['alerts'] as $alert) {
-                $alertData = collect($alert)->except(['name', 'category_twitch_id', 'category_twitch_ids', 'category_id', 'category_ids'])->toArray();
-
-                // Map single category
-                if (! empty($alert['category_twitch_id'])) {
-                    $alertData['category_id'] = $twitchToId[$alert['category_twitch_id']] ?? null;
-                }
-
-                // Map multiple categories
-                if (! empty($alert['category_twitch_ids'])) {
-                    $alertData['category_ids'] = array_values(array_filter(
-                        array_map(fn ($tid) => $twitchToId[$tid] ?? null, $alert['category_twitch_ids'])
-                    ));
-                }
-
-                AlertRule::updateOrCreate(
-                    ['name' => $alert['name']],
-                    $alertData,
-                );
-            }
-        }
-
-        return back()->with('success', 'Configuration imported successfully.');
+        return back()->with('success', 'Configuration imported successfully'.($summary ? " ({$summary})." : '.'));
     }
+
+    // ── Test endpoints (generic results only; details go to the log, scrubbed) ──
 
     public function testTwitch(TwitchApiService $twitch): JsonResponse
     {
-        return response()->json($twitch->testConnection());
+        $result = $twitch->testConnection();
+
+        if (! ($result['success'] ?? false)) {
+            Log::info('Twitch connection test failed', ['error' => Redactor::message($result['message'] ?? '')]);
+            $result['message'] = $result['message'] === 'Twitch API credentials not configured'
+                ? $result['message']
+                : 'Connection failed. Check the client ID and secret.';
+        }
+
+        return response()->json($result);
     }
 
     public function testEmail(TwitchApiService $twitch): JsonResponse
@@ -279,13 +172,13 @@ class SettingsController extends Controller
             $alerts = $this->buildTestAlerts($twitch);
             Mail::to($recipient)->send(new \App\Mail\StreamAlertMail($alerts));
 
-            return response()->json(['success' => true, 'message' => "Test email sent to {$recipient}."]);
-        } catch (\Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()]);
+            return response()->json(['success' => true, 'message' => 'Test email sent.']);
+        } catch (Throwable $e) {
+            return $this->testFailure('Test email', $e, 'Sending failed. Check the SMTP settings and the application log.');
         }
     }
 
-    public function testDiscord(TwitchApiService $twitch): JsonResponse
+    public function testDiscord(TwitchApiService $twitch, SafeHttpClient $http): JsonResponse
     {
         $webhookUrl = Setting::get('discord_webhook_url');
         if (! $webhookUrl) {
@@ -295,7 +188,7 @@ class SettingsController extends Controller
         $fake = $this->pickTestStream($twitch);
 
         try {
-            $response = Http::post($webhookUrl, [
+            $response = $http->post($webhookUrl, [
                 'embeds' => [[
                     'title' => "{$fake['user_name']} is live!",
                     'url' => "https://www.twitch.tv/{$fake['user_login']}",
@@ -306,23 +199,26 @@ class SettingsController extends Controller
                         ['name' => 'Viewers', 'value' => number_format($fake['viewers']), 'inline' => true],
                         ['name' => 'Language', 'value' => strtoupper($fake['language']), 'inline' => true],
                     ],
-                    'thumbnail' => ['url' => $fake['avatar']],
+                    'thumbnail' => $fake['avatar'] ? ['url' => $fake['avatar']] : null,
                     'footer' => ['text' => "Alert: {$fake['rule']} (test)"],
                     'timestamp' => now()->toIso8601String(),
                 ]],
-            ]);
+                'allowed_mentions' => ['parse' => []],
+            ], [], AlertService::discordPolicy());
 
             if ($response->successful()) {
                 return response()->json(['success' => true, 'message' => 'Test message sent to Discord.']);
             }
 
-            return response()->json(['success' => false, 'message' => "Discord returned HTTP {$response->status()}."]);
-        } catch (\Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()]);
+            Log::info('Discord test returned a non-success status', ['status' => $response->status()]);
+
+            return response()->json(['success' => false, 'message' => 'Discord did not accept the message. Check the webhook URL.']);
+        } catch (Throwable $e) {
+            return $this->testFailure('Discord test', $e, 'Could not deliver to Discord. Check the webhook URL and the application log.');
         }
     }
 
-    public function testTelegram(TwitchApiService $twitch): JsonResponse
+    public function testTelegram(TwitchApiService $twitch, SafeHttpClient $http): JsonResponse
     {
         $token = Setting::get('telegram_bot_token');
         $chatId = Setting::get('telegram_chat_id');
@@ -341,24 +237,26 @@ class SettingsController extends Controller
             ."<a href=\"{$url}\">Watch on Twitch →</a>";
 
         try {
-            $response = Http::post("https://api.telegram.org/bot{$token}/sendMessage", [
+            $response = $http->post("https://api.telegram.org/bot{$token}/sendMessage", [
                 'chat_id' => $chatId,
                 'text' => $text,
                 'parse_mode' => 'HTML',
                 'disable_web_page_preview' => false,
-            ]);
+            ], [], ['allowed_hosts' => ['api.telegram.org'], 'require_https' => true]);
 
             if ($response->json('ok')) {
                 return response()->json(['success' => true, 'message' => 'Test message sent to Telegram.']);
             }
 
-            return response()->json(['success' => false, 'message' => $response->json('description', 'Unknown error')]);
-        } catch (\Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()]);
+            Log::info('Telegram test rejected', ['status' => $response->status(), 'description' => Redactor::message((string) $response->json('description', ''))]);
+
+            return response()->json(['success' => false, 'message' => 'Telegram rejected the message. Check the bot token and chat ID.']);
+        } catch (Throwable $e) {
+            return $this->testFailure('Telegram test', $e, 'Could not deliver to Telegram. Check the bot token, chat ID and the application log.');
         }
     }
 
-    public function testWebhook(TwitchApiService $twitch): JsonResponse
+    public function testWebhook(TwitchApiService $twitch, SafeHttpClient $http): JsonResponse
     {
         $webhookUrl = Setting::get('webhook_url');
         if (! $webhookUrl) {
@@ -370,9 +268,9 @@ class SettingsController extends Controller
         try {
             if (Setting::get('webhook_format', 'json') === 'ntfy') {
                 $body = "{$fake['title']}\n"
-                    . "{$fake['game']} · ".number_format($fake['viewers'])." viewers\n"
-                    . "Tags: ".implode(', ', ['English', $fake['game']])."\n"
-                    . "Alert: {$fake['rule']} (test)";
+                    ."{$fake['game']} · ".number_format($fake['viewers']).' viewers'."\n"
+                    .'Tags: '.implode(', ', ['English', $fake['game']])."\n"
+                    ."Alert: {$fake['rule']} (test)";
 
                 $headers = [
                     'Title' => '=?UTF-8?B?'.base64_encode("{$fake['user_name']} is live").'?=',
@@ -382,9 +280,9 @@ class SettingsController extends Controller
                     $headers['Icon'] = $fake['avatar'];
                 }
 
-                $response = Http::withHeaders($headers)->withBody($body, 'text/plain')->post($webhookUrl);
+                $response = $http->post($webhookUrl, $body, $headers, ['content_type' => 'text/plain']);
             } else {
-                $response = Http::post($webhookUrl, [
+                $response = $http->post($webhookUrl, [
                     'event' => 'stream.alert',
                     'rule' => $fake['rule'].' (test)',
                     'channel' => $fake['user_name'],
@@ -403,10 +301,23 @@ class SettingsController extends Controller
                 ]);
             }
 
-            return response()->json(['success' => true, 'message' => "Webhook responded with HTTP {$response->status()}."]);
-        } catch (\Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()]);
+            if ($response->successful()) {
+                return response()->json(['success' => true, 'message' => 'Test webhook delivered.']);
+            }
+
+            Log::info('Webhook test returned a non-success status', ['status' => $response->status()]);
+
+            return response()->json(['success' => false, 'message' => 'The webhook endpoint did not accept the request.']);
+        } catch (Throwable $e) {
+            return $this->testFailure('Webhook test', $e, 'Could not deliver the webhook. Check the URL and the application log.');
         }
+    }
+
+    private function testFailure(string $what, Throwable $e, string $userMessage): JsonResponse
+    {
+        Log::info("{$what} failed", ['exception' => $e::class, 'error' => Redactor::message($e->getMessage())]);
+
+        return response()->json(['success' => false, 'message' => $userMessage]);
     }
 
     private function buildTestAlerts(TwitchApiService $twitch): array
@@ -427,7 +338,7 @@ class SettingsController extends Controller
                 'started_at' => now()->subMinutes(rand(5, 120)),
             ]);
 
-            return ['rule' => new \App\Models\AlertRule(['name' => $s['rule']]), 'stream' => $stream];
+            return ['rule' => new AlertRule(['name' => $s['rule']]), 'stream' => $stream];
         })->toArray();
     }
 
@@ -435,7 +346,7 @@ class SettingsController extends Controller
     {
         $s = collect($this->testStreamTemplates())->random();
         $avatarMap = $this->fetchAvatars($twitch, [$s['user_login']]);
-        $s['avatar'] = $avatarMap[$s['user_login']] ?? null;
+        $s['avatar'] = \App\Support\ImageUrl::safe($avatarMap[$s['user_login']] ?? null);
 
         return $s;
     }
@@ -448,7 +359,7 @@ class SettingsController extends Controller
             return collect($users)->mapWithKeys(fn ($u) => [
                 $u['login'] => $u['profile_image_url'] ?? null,
             ])->toArray();
-        } catch (\Exception) {
+        } catch (Throwable) {
             return [];
         }
     }
@@ -492,17 +403,12 @@ class SettingsController extends Controller
     public function checkUpdate(): JsonResponse
     {
         try {
-            // Build-time version from VERSION file
-            $versionFile = base_path('VERSION');
-            $buildHash = file_exists($versionFile)
-                ? trim(file_get_contents($versionFile))
-                : trim(shell_exec('git -C '.base_path().' rev-parse HEAD 2>/dev/null') ?: '');
+            $buildHash = $this->readFirstLine(base_path('VERSION'));
 
             if (! $buildHash || $buildHash === 'unknown') {
                 return response()->json(['update_available' => false]);
             }
 
-            // Current HEAD from mounted .git (after git pull on host)
             $latestHash = $this->resolveGitHead();
 
             if (! $latestHash) {
@@ -516,32 +422,53 @@ class SettingsController extends Controller
                 'local_version' => substr($buildHash, 0, 7),
                 'remote_version' => $updateAvailable ? substr($latestHash, 0, 7) : null,
             ]);
-        } catch (\Exception) {
+        } catch (Throwable) {
             return response()->json(['update_available' => false]);
         }
     }
 
+    /**
+     * Resolve the checked-out commit from the mounted git metadata without
+     * spawning a shell. Docker mounts .git-head / .git-refs; a source checkout
+     * has .git/HEAD directly.
+     */
     private function resolveGitHead(): ?string
     {
-        // Docker: mounted .git-head and .git-refs from host
-        $headFile = base_path('.git-head');
-        $refsDir = base_path('.git-refs');
-
-        if (file_exists($headFile)) {
-            $ref = trim(file_get_contents($headFile));
-            if (str_starts_with($ref, 'ref: ')) {
-                $refPath = $refsDir.'/'.str_replace('refs/', '', substr($ref, 5));
-
-                return file_exists($refPath) ? trim(file_get_contents($refPath)) : null;
+        foreach ([[base_path('.git-head'), base_path('.git-refs')], [base_path('.git/HEAD'), base_path('.git/refs')]] as [$headFile, $refsDir]) {
+            if (! is_file($headFile)) {
+                continue;
             }
 
-            return $ref;
+            $ref = $this->readFirstLine($headFile);
+            if ($ref === null) {
+                return null;
+            }
+
+            if (str_starts_with($ref, 'ref: ')) {
+                $relative = substr($ref, 5);
+                $relative = str_starts_with($relative, 'refs/') ? substr($relative, 5) : $relative;
+                if (! preg_match('#^[A-Za-z0-9._/\-]+$#', $relative) || str_contains($relative, '..')) {
+                    return null;
+                }
+                $hash = $this->readFirstLine($refsDir.'/'.$relative);
+
+                return $hash && preg_match('/^[0-9a-f]{40}$/', $hash) ? $hash : null;
+            }
+
+            return preg_match('/^[0-9a-f]{40}$/', $ref) ? $ref : null;
         }
 
-        // Dev: direct git
-        $hash = trim(shell_exec('git -C '.base_path().' rev-parse HEAD 2>/dev/null') ?: '');
+        return null;
+    }
 
-        return $hash ?: null;
+    private function readFirstLine(string $path): ?string
+    {
+        if (! is_file($path) || ! is_readable($path)) {
+            return null;
+        }
+        $line = trim((string) strtok((string) file_get_contents($path, false, null, 0, 512), "\n"));
+
+        return $line === '' ? null : $line;
     }
 
     private function updateMailConfig(): void

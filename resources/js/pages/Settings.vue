@@ -1,16 +1,16 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
-import { useForm, router } from '@inertiajs/vue3';
-import { Key, RefreshCw, Filter, Mail, Palette, Terminal, X, Plus, MessageCircle, Lock, ShieldOff, Webhook, Download, Upload, Send, Loader2, BotMessageSquare, ArrowUpCircle } from 'lucide-vue-next';
+import { useForm, router, Link } from '@inertiajs/vue3';
+import { Key, RefreshCw, Filter, Mail, Palette, Terminal, X, Plus, MessageCircle, Lock, Webhook, Download, Upload, Send, Loader2, BotMessageSquare, ArrowUpCircle } from 'lucide-vue-next';
 import AppLayout from '@/layouts/AppLayout.vue';
 import { useTheme } from '@/composables/useTheme';
 
-const props = defineProps<{ settings: Record<string, any>; activeCategoriesCount: number }>();
+const props = defineProps<{ settings: Record<string, any>; activeCategoriesCount: number; webhookAllowedHosts: string[] }>();
 const { theme: currentTheme, setTheme } = useTheme();
 
 const form = useForm({
     twitch_client_id: props.settings.twitch_client_id || '',
-    twitch_client_secret: props.settings.twitch_client_secret || '',
+    twitch_client_secret: '',
     auto_sync_enabled: props.settings.auto_sync_enabled !== '0' && props.settings.auto_sync_enabled !== false,
     sync_frequency_minutes: props.settings.sync_frequency_minutes || '1',
     global_min_viewers: props.settings.global_min_viewers || '0',
@@ -22,22 +22,32 @@ const form = useForm({
     smtp_host: props.settings.smtp_host || 'mailpit',
     smtp_port: props.settings.smtp_port || '1025',
     smtp_username: props.settings.smtp_username || '',
-    smtp_password: props.settings.smtp_password || '',
+    smtp_password: '',
     smtp_encryption: props.settings.smtp_encryption || '',
     mail_from_address: props.settings.mail_from_address || 'streamradar@localhost',
     mail_from_name: props.settings.mail_from_name || 'StreamRadar',
-    discord_webhook_url: props.settings.discord_webhook_url || '',
-    telegram_bot_token: props.settings.telegram_bot_token || '',
+    discord_webhook_url: '',
+    telegram_bot_token: '',
     telegram_chat_id: props.settings.telegram_chat_id || '',
-    webhook_url: props.settings.webhook_url || '',
+    webhook_url: '',
     webhook_format: props.settings.webhook_format || 'json',
     notifications_email_enabled: props.settings.notifications_email_enabled !== '0',
     notifications_discord_enabled: props.settings.notifications_discord_enabled !== '0',
     notifications_telegram_enabled: props.settings.notifications_telegram_enabled !== '0',
     notifications_webhook_enabled: props.settings.notifications_webhook_enabled !== '0',
-    auth_username: props.settings.auth_username || '',
-    auth_password: '',
+    clear_secrets: [] as string[],
 });
+
+// Secrets are never sent to the browser. The server only tells us whether a
+// value is stored (`<key>_set`) and a mask (`<key>_masked`). Leaving a secret
+// field empty keeps the stored value; "remove" clears it on save.
+const SECRET_KEYS = ['twitch_client_secret', 'smtp_password', 'telegram_bot_token', 'discord_webhook_url', 'webhook_url'] as const;
+type SecretKey = typeof SECRET_KEYS[number];
+function secretSet(key: SecretKey): boolean { return !!props.settings[`${key}_set`] && !form.clear_secrets.includes(key); }
+function secretMask(key: SecretKey): string { return props.settings[`${key}_masked`] || ''; }
+function clearSecret(key: SecretKey) { if (!form.clear_secrets.includes(key)) form.clear_secrets.push(key); (form as any)[key] = ''; }
+function undoClear(key: SecretKey) { form.clear_secrets = form.clear_secrets.filter(k => k !== key); }
+
 
 const globalLangs = ref<string[]>((() => { try { return JSON.parse(form.global_languages || '[]'); } catch { return []; } })());
 const globalKws = ref<string[]>((() => { try { return JSON.parse(form.global_keywords || '[]'); } catch { return []; } })());
@@ -101,27 +111,6 @@ async function testNotification(channel: 'email' | 'discord' | 'telegram' | 'web
         result.value = { success: false, message: e.response?.data?.message || e.message || 'Request failed' };
     } finally {
         loading.value = false;
-    }
-}
-
-// Disable auth
-const showDisableAuth = ref(false);
-const disablePassword = ref('');
-const disableError = ref('');
-const disabling = ref(false);
-
-async function disableAuth() {
-    disableError.value = '';
-    disabling.value = true;
-    try {
-        await window.axios.post('/settings/disable-auth', { password: disablePassword.value });
-        showDisableAuth.value = false;
-        disablePassword.value = '';
-        router.reload();
-    } catch (e: any) {
-        disableError.value = e.response?.data?.message || 'Invalid password';
-    } finally {
-        disabling.value = false;
     }
 }
 
@@ -278,8 +267,10 @@ onMounted(() => {
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Client Secret</label>
-                            <input v-model="form.twitch_client_secret" type="password" :placeholder="settings.twitch_client_secret_masked || 'Your Twitch Client Secret'"
+                            <input v-model="form.twitch_client_secret" type="password" autocomplete="new-password" :placeholder="secretSet('twitch_client_secret') ? 'Leave empty to keep the stored secret' : 'Your Twitch Client Secret'"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <p v-if="secretSet('twitch_client_secret')" class="text-[11px] text-gray-400 dark:text-zinc-600 mt-1">Stored: <span class="font-mono">{{ secretMask('twitch_client_secret') }}</span> · leave empty to keep · <button type="button" @click="clearSecret('twitch_client_secret')" class="text-red-500 hover:underline">remove</button></p>
+                            <p v-else-if="form.clear_secrets.includes('twitch_client_secret')" class="text-[11px] text-amber-600 dark:text-amber-400 mt-1">Will be removed on save · <button type="button" @click="undoClear('twitch_client_secret')" class="hover:underline">undo</button></p>
                         </div>
                         <div class="flex items-center gap-3">
                             <button @click="testTwitch" :disabled="testing"
@@ -435,8 +426,10 @@ onMounted(() => {
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">SMTP Password</label>
-                            <input v-model="form.smtp_password" type="password"
+                            <input v-model="form.smtp_password" type="password" autocomplete="new-password" :placeholder="secretSet('smtp_password') ? 'Leave empty to keep the stored password' : ''"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <p v-if="secretSet('smtp_password')" class="text-[11px] text-gray-400 dark:text-zinc-600 mt-1">Stored: <span class="font-mono">{{ secretMask('smtp_password') }}</span> · leave empty to keep · <button type="button" @click="clearSecret('smtp_password')" class="text-red-500 hover:underline">remove</button></p>
+                            <p v-else-if="form.clear_secrets.includes('smtp_password')" class="text-[11px] text-amber-600 dark:text-amber-400 mt-1">Will be removed on save · <button type="button" @click="undoClear('smtp_password')" class="hover:underline">undo</button></p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">From Address</label>
@@ -474,8 +467,10 @@ onMounted(() => {
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Webhook URL</label>
-                        <input v-model="form.discord_webhook_url" autocomplete="off" type="text" placeholder="https://discord.com/api/webhooks/..."
+                        <input v-model="form.discord_webhook_url" autocomplete="off" type="text" :placeholder="secretSet('discord_webhook_url') ? 'Leave empty to keep the stored URL' : 'https://discord.com/api/webhooks/...'"
                             class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                        <p v-if="secretSet('discord_webhook_url')" class="text-[11px] text-gray-400 dark:text-zinc-600 mt-1">Stored: <span class="font-mono">{{ secretMask('discord_webhook_url') }}</span> · leave empty to keep · <button type="button" @click="clearSecret('discord_webhook_url')" class="text-red-500 hover:underline">remove</button></p>
+                        <p v-else-if="form.clear_secrets.includes('discord_webhook_url')" class="text-[11px] text-amber-600 dark:text-amber-400 mt-1">Will be removed on save · <button type="button" @click="undoClear('discord_webhook_url')" class="hover:underline">undo</button></p>
                         <p class="mt-2 text-xs text-gray-400 dark:text-zinc-500">
                             Create a webhook in your Discord server: Server Settings &rarr; Integrations &rarr; Webhooks &rarr; New Webhook. Copy the URL and paste it here.
                         </p>
@@ -506,8 +501,10 @@ onMounted(() => {
                     <div class="space-y-4">
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Bot Token</label>
-                            <input v-model="form.telegram_bot_token" type="password" :placeholder="settings.telegram_bot_token_masked || 'Paste token from @BotFather'"
+                            <input v-model="form.telegram_bot_token" type="password" autocomplete="new-password" :placeholder="secretSet('telegram_bot_token') ? 'Leave empty to keep the stored token' : 'Paste token from @BotFather'"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <p v-if="secretSet('telegram_bot_token')" class="text-[11px] text-gray-400 dark:text-zinc-600 mt-1">Stored: <span class="font-mono">{{ secretMask('telegram_bot_token') }}</span> · leave empty to keep · <button type="button" @click="clearSecret('telegram_bot_token')" class="text-red-500 hover:underline">remove</button></p>
+                            <p v-else-if="form.clear_secrets.includes('telegram_bot_token')" class="text-[11px] text-amber-600 dark:text-amber-400 mt-1">Will be removed on save · <button type="button" @click="undoClear('telegram_bot_token')" class="hover:underline">undo</button></p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Chat ID</label>
@@ -543,8 +540,10 @@ onMounted(() => {
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Webhook URL</label>
-                        <input v-model="form.webhook_url" autocomplete="off" type="text" placeholder="https://ntfy.sh/your-topic or any URL..."
+                        <input v-model="form.webhook_url" autocomplete="off" type="text" :placeholder="secretSet('webhook_url') ? 'Leave empty to keep the stored URL' : 'https://ntfy.sh/your-topic or any public URL...'"
                             class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                        <p v-if="secretSet('webhook_url')" class="text-[11px] text-gray-400 dark:text-zinc-600 mt-1">Stored: <span class="font-mono">{{ secretMask('webhook_url') }}</span> · leave empty to keep · <button type="button" @click="clearSecret('webhook_url')" class="text-red-500 hover:underline">remove</button></p>
+                        <p v-else-if="form.clear_secrets.includes('webhook_url')" class="text-[11px] text-amber-600 dark:text-amber-400 mt-1">Will be removed on save · <button type="button" @click="undoClear('webhook_url')" class="hover:underline">undo</button></p>
                         <p class="mt-2 text-xs text-gray-400 dark:text-zinc-500">
                             Receives a POST for every alert. Choose the payload format below: JSON works with Zapier, Make or any custom endpoint, ntfy sends a readable notification.
                         </p>
@@ -574,41 +573,18 @@ onMounted(() => {
                         <Lock class="w-5 h-5 text-purple-500" />
                         <h3 class="text-lg font-bold text-gray-900 dark:text-white">Access Control</h3>
                     </div>
-                    <p class="text-xs text-gray-500 dark:text-zinc-500 mb-4">
-                        {{ settings.auth_enabled ? 'Authentication is enabled. Leave password empty to keep current.' : 'No password set — app is open. Set credentials to require login.' }}
-                    </p>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                            <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Username</label>
-                            <input v-model="form.auth_username" autocomplete="off" type="text" placeholder="admin"
-                                class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Password</label>
-                            <input v-model="form.auth_password" type="password" :placeholder="settings.auth_enabled ? '••••••••' : 'Set password to enable'"
-                                class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
-                        </div>
-                    </div>
-                    <!-- Disable auth -->
-                    <div v-if="settings.auth_enabled" class="mt-4">
-                        <button v-if="!showDisableAuth" @click="showDisableAuth = true"
-                            class="px-4 py-2 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors flex items-center gap-1.5">
-                            <ShieldOff class="w-4 h-4" /> Disable Access Control
-                        </button>
-                        <div v-else class="flex items-center gap-2 mt-2">
-                            <input v-model="disablePassword" type="password" placeholder="Confirm current password"
-                                class="flex-1 max-w-xs px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-red-500"
-                                @keydown.enter="disableAuth" />
-                            <button @click="disableAuth" :disabled="disabling || !disablePassword"
-                                class="px-4 py-2 text-sm font-medium bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors">
-                                Confirm
-                            </button>
-                            <button @click="showDisableAuth = false; disablePassword = ''; disableError = ''"
-                                class="px-3 py-2 text-sm text-gray-500 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-lg transition-colors">
-                                Cancel
-                            </button>
-                        </div>
-                        <p v-if="disableError" class="text-xs text-red-500 mt-2">{{ disableError }}</p>
+                    <div class="space-y-3 text-xs text-gray-500 dark:text-zinc-500">
+                        <p>
+                            Signing in is always required. Accounts and roles are managed on the
+                            <Link href="/users" class="text-purple-600 dark:text-purple-400 hover:underline">Users</Link> page;
+                            change your own password under <Link href="/account" class="text-purple-600 dark:text-purple-400 hover:underline">Account</Link>.
+                            Single sign-on (OpenID Connect) is configured on the server through <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-zinc-800">OIDC_*</code> environment variables.
+                        </p>
+                        <p>
+                            Outbound webhooks may only target public internet addresses. Private hosts explicitly allowed via
+                            <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-zinc-800">WEBHOOK_ALLOWED_HOSTS</code>:
+                            <span class="font-mono">{{ webhookAllowedHosts.length ? webhookAllowedHosts.join(', ') : 'none' }}</span>
+                        </p>
                     </div>
                 </div>
 

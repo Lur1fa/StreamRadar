@@ -8,13 +8,20 @@ use App\Models\HistoryEvent;
 use App\Models\Setting;
 use App\Models\Stream;
 use App\Models\StreamAlertTracking;
-use Illuminate\Support\Facades\Http;
+use App\Services\Http\SafeHttpClient;
+use App\Support\ImageUrl;
+use App\Support\Redactor;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Throwable;
 
 class AlertService
 {
-    public function __construct(private AlertTemplateRenderer $templateRenderer) {}
+    public function __construct(
+        private AlertTemplateRenderer $templateRenderer,
+        private SafeHttpClient $http,
+    ) {}
+
     /**
      * @param  bool  $silent  If true, records tracking but does not trigger notifications (used for initial sync)
      * @return array<array{rule: AlertRule, stream: Stream}>
@@ -110,6 +117,10 @@ class AlertService
     }
 
     /**
+     * Fan out to every enabled channel. Each channel is isolated: a failure
+     * (network error, bad template, misconfiguration) is logged and never
+     * propagates to the caller, so a scheduled sync always completes.
+     *
      * @param  array<array{rule: AlertRule, stream: Stream}>  $allTriggered
      */
     public function sendNotifications(array $allTriggered): void
@@ -118,22 +129,28 @@ class AlertService
             return;
         }
 
-        if (Setting::get('notifications_email_enabled', '1') !== '0') {
-            $this->sendEmailAlerts($allTriggered);
-        }
-        if (Setting::get('notifications_discord_enabled', '1') !== '0') {
-            $this->sendDiscordAlerts($allTriggered);
-        }
-        if (Setting::get('notifications_telegram_enabled', '1') !== '0') {
-            $this->sendTelegramAlerts($allTriggered);
-        }
-        if (Setting::get('notifications_webhook_enabled', '1') !== '0') {
-            $this->sendWebhookAlerts($allTriggered);
+        $channels = [
+            'email' => fn () => $this->sendEmailAlerts($allTriggered),
+            'discord' => fn () => $this->sendDiscordAlerts($allTriggered),
+            'telegram' => fn () => $this->sendTelegramAlerts($allTriggered),
+            'webhook' => fn () => $this->sendWebhookAlerts($allTriggered),
+        ];
+
+        foreach ($channels as $name => $send) {
+            if (Setting::get("notifications_{$name}_enabled", '1') === '0') {
+                continue;
+            }
+
+            try {
+                $send();
+            } catch (Throwable $e) {
+                $this->logFailure("Failed to send {$name} alerts", $e);
+            }
         }
     }
 
     /**
-     * @return array<array{stream: Stream, rules: string[]}>
+     * @return array<array{stream: Stream, rules: string[], template: ?array}>
      */
     private function groupByStream(array $alerts): array
     {
@@ -168,11 +185,29 @@ class AlertService
             'viewers' => number_format($stream->viewer_count),
             'category' => $stream->game_name ?? $stream->category?->name ?? 'Unknown',
             'language' => strtoupper($stream->language ?? '?'),
-            'avatar' => $stream->profile_image_url,
-            'thumbnail' => $stream->getThumbnailUrlSized(440, 248),
-            'category_box_art' => $categoryBoxArt,
+            'avatar' => ImageUrl::safe($stream->profile_image_url),
+            'thumbnail' => ImageUrl::safe($stream->getThumbnailUrlSized(440, 248)),
+            'category_box_art' => ImageUrl::safe($categoryBoxArt),
             'template' => $entry['template'],
         ];
+    }
+
+    /**
+     * Render a template, falling back to the built-in format when the stored
+     * template is invalid, so one bad rule can never break a channel.
+     */
+    private function render(?array $template, Stream $stream, array $entry, string $channel): string
+    {
+        try {
+            return $this->templateRenderer->render($template, $stream, $entry, $channel);
+        } catch (Throwable $e) {
+            Log::warning('Invalid alert notification template; using default format.', [
+                'rules' => $entry['rules'] ?? [],
+                'error' => Redactor::message($e->getMessage()),
+            ]);
+
+            return $this->templateRenderer->render(null, $stream, $entry, $channel);
+        }
     }
 
     // ── Discord ──────────────────────────────────────────────────────────
@@ -202,9 +237,8 @@ class AlertService
                     'url' => $p['url'],
                 ],
                 'timestamp' => now()->toIso8601String(),
+                'description' => $this->render($p['template'], $p['stream'], $entry, 'discord'),
             ];
-
-            $embed['description'] = $this->templateRenderer->render($p['template'], $p['stream'], $entry, 'discord');
 
             if ($p['avatar']) {
                 $embed['author']['icon_url'] = $p['avatar'];
@@ -221,11 +255,24 @@ class AlertService
 
         foreach (array_chunk($embeds, 10) as $chunk) {
             try {
-                Http::post($webhookUrl, ['embeds' => $chunk]);
-            } catch (\Exception $e) {
-                Log::warning("Failed to send Discord alert: {$e->getMessage()}");
+                $this->http->post($webhookUrl, [
+                    'embeds' => $chunk,
+                    // Stream titles are attacker-controlled; never let them ping anyone.
+                    'allowed_mentions' => ['parse' => []],
+                ], [], self::discordPolicy());
+            } catch (Throwable $e) {
+                $this->logFailure('Failed to send Discord alert', $e);
             }
         }
+    }
+
+    public static function discordPolicy(): array
+    {
+        return [
+            'allowed_hosts' => (array) config('security.webhook.discord_hosts', []),
+            'require_https' => true,
+            'path_prefix' => '/api/webhooks/',
+        ];
     }
 
     // ── Telegram ─────────────────────────────────────────────────────────
@@ -245,32 +292,33 @@ class AlertService
 
         $grouped = $this->groupByStream($telegramAlerts);
         $apiBase = "https://api.telegram.org/bot{$token}";
+        $policy = ['allowed_hosts' => ['api.telegram.org'], 'require_https' => true];
 
         foreach ($grouped as $entry) {
             $p = $this->presentStream($entry);
             $s = $p['stream'];
 
             $caption = '<b>'.htmlspecialchars("{$s->user_name} is live", ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')."</b>\n"
-                .$this->templateRenderer->render($p['template'], $s, $entry, 'telegram');
+                .$this->render($p['template'], $s, $entry, 'telegram');
 
             try {
                 if ($p['thumbnail']) {
-                    Http::post("{$apiBase}/sendPhoto", [
+                    $this->http->post("{$apiBase}/sendPhoto", [
                         'chat_id' => $chatId,
                         'photo' => $p['thumbnail'],
                         'caption' => $caption,
                         'parse_mode' => 'HTML',
-                    ]);
+                    ], [], $policy);
                 } else {
-                    Http::post("{$apiBase}/sendMessage", [
+                    $this->http->post("{$apiBase}/sendMessage", [
                         'chat_id' => $chatId,
                         'text' => $caption,
                         'parse_mode' => 'HTML',
                         'disable_web_page_preview' => true,
-                    ]);
+                    ], [], $policy);
                 }
-            } catch (\Exception $e) {
-                Log::warning("Failed to send Telegram alert: {$e->getMessage()}");
+            } catch (Throwable $e) {
+                $this->logFailure('Failed to send Telegram alert', $e);
             }
         }
     }
@@ -296,7 +344,8 @@ class AlertService
         }
     }
 
-    private function sendJsonWebhook(string $webhookUrl, array $webhookAlerts): void {
+    private function sendJsonWebhook(string $webhookUrl, array $webhookAlerts): void
+    {
         $payload = [];
         foreach ($this->groupByStream($webhookAlerts) as $entry) {
             $p = $this->presentStream($entry);
@@ -322,13 +371,13 @@ class AlertService
         }
 
         try {
-            Http::post($webhookUrl, [
+            $this->http->post($webhookUrl, [
                 'event' => 'stream.alerts.batch',
                 'count' => count($payload),
                 'alerts' => $payload,
             ]);
-        } catch (\Exception $e) {
-            Log::warning("Failed to send webhook alert: {$e->getMessage()}");
+        } catch (Throwable $e) {
+            $this->logFailure('Failed to send webhook alert', $e);
         }
     }
 
@@ -338,15 +387,18 @@ class AlertService
             $p = $this->presentStream($entry);
             $s = $p['stream'];
 
-            $body = $this->templateRenderer->render($p['template'], $s, $entry);
+            $body = $this->render($p['template'], $s, $entry, 'plain');
 
             $headers = [
                 'Title' => '=?UTF-8?B?'.base64_encode("{$s->user_name} is live").'?=',
-                'Click' => $p['url']
             ];
 
+            // Never put a value with CR/LF or control characters into a header.
+            if ($p['url'] !== '' && ! preg_match('/[\s\x00-\x1F\x7F]/', $p['url'])) {
+                $headers['Click'] = $p['url'];
+            }
             if ($p['thumbnail']) {
-                $headers['Attach'] = $p['thumbnail'] . '?t=' . time();
+                $headers['Attach'] = $p['thumbnail'].'?t='.time();
                 $headers['Filename'] = 'preview.jpg';
             }
             if ($p['avatar']) {
@@ -354,11 +406,9 @@ class AlertService
             }
 
             try {
-                Http::withHeaders($headers)
-                    ->withBody($body, 'text/plain')
-                    ->post($webhookUrl);
-            } catch (\Exception $e) {
-                Log::warning("Failed to send webhook alert: {$e->getMessage()}");
+                $this->http->post($webhookUrl, $body, $headers, ['content_type' => 'text/plain']);
+            } catch (Throwable $e) {
+                $this->logFailure('Failed to send webhook alert', $e);
             }
         }
     }
@@ -381,8 +431,8 @@ class AlertService
 
         try {
             Mail::to($recipient)->send(new StreamAlertMail($emailAlerts));
-        } catch (\Exception $e) {
-            Log::warning("Failed to send alert email: {$e->getMessage()}");
+        } catch (Throwable $e) {
+            $this->logFailure('Failed to send alert email', $e);
         }
     }
 
@@ -402,6 +452,14 @@ class AlertService
             'mail.mailers.smtp.encryption' => Setting::get('smtp_encryption') ?: null,
             'mail.from.address' => Setting::get('mail_from_address'),
             'mail.from.name' => Setting::get('mail_from_name', 'StreamRadar'),
+        ]);
+    }
+
+    private function logFailure(string $message, Throwable $e): void
+    {
+        Log::warning($message, [
+            'exception' => $e::class,
+            'error' => Redactor::message($e->getMessage()),
         ]);
     }
 }

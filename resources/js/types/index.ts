@@ -144,16 +144,33 @@ export interface AppSettings {
     sync_frequency_minutes: number;
 }
 
+export type Role = 'admin' | 'user';
+
+export interface AuthUser {
+    id: number;
+    name: string;
+    email: string;
+    role: Role;
+    is_admin: boolean;
+    has_password: boolean;
+    sso: boolean;
+    disabled: boolean;
+    last_login_at: string | null;
+    created_at: string | null;
+}
+
 export interface Flash {
     success: string | null;
     error: string | null;
 }
 
 export interface PageProps {
+    auth: { user: AuthUser | null };
     stats: Stats;
     appSettings: AppSettings;
     flash: Flash;
     pendingAlerts: PendingAlert[];
+    errors: Record<string, string>;
 }
 
 export interface PaginatedData<T> {

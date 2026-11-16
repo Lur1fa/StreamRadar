@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useAuth } from '@/composables/useAuth';
+const { isAdmin } = useAuth();
 import { ref, watch, onMounted } from 'vue';
 import { router } from '@inertiajs/vue3';
 import { ShieldBan, User, Type, Tag, Trash2, Plus } from 'lucide-vue-next';
@@ -86,7 +88,7 @@ function formatDate(dateStr: string): string {
         </div>
 
         <!-- Single form, changes placeholder per tab -->
-        <form @submit.prevent="addRule" class="flex gap-2 mb-6">
+        <form v-if="isAdmin" @submit.prevent="addRule" class="flex gap-2 mb-6">
             <input
                 ref="inputEl"
                 v-model="inputValue"
@@ -127,7 +129,7 @@ function formatDate(dateStr: string): string {
                     <p v-else class="text-sm font-medium text-gray-900 dark:text-white">{{ item.value }}</p>
                 </div>
                 <span class="text-xs text-gray-400 dark:text-zinc-600 shrink-0 hidden sm:block">{{ formatDate(item.created_at) }}</span>
-                <button @click="removeRule(item)" class="shrink-0 p-1.5 text-gray-400 hover:text-red-500 dark:hover:text-red-400 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors">
+                <button v-if="isAdmin" @click="removeRule(item)" class="shrink-0 p-1.5 text-gray-400 hover:text-red-500 dark:hover:text-red-400 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors">
                     <Trash2 class="w-4 h-4" />
                 </button>
             </div>

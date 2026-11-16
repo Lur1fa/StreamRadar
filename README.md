@@ -64,6 +64,18 @@ docker compose up -d
 
 Everything is automatic — database, encryption keys, and migrations are set up on first launch.
 
+**Create the first administrator.** StreamRadar requires a login and ships with no default account. On first start it prints a one-time setup token to the container log:
+
+```bash
+docker compose logs streamradar        # look for "Setup token:"
+# or generate a fresh one at any time:
+docker compose exec streamradar php artisan auth:setup-token
+```
+
+Open the app, go to the setup page, and paste the token to create your admin account. Prefer the command line? Run `docker compose exec streamradar php artisan user:create --admin`.
+
+**Access from other devices.** By default the container is published on `127.0.0.1` only. To expose it on your LAN set `APP_BIND=0.0.0.0` in `.env` (ideally behind a TLS reverse proxy, with `APP_URL=https://…` so the session cookie is marked `Secure`).
+
 **Change the port** (e.g. to 3000): add `APP_PORT=3000` to `.env` file, then run `docker compose up -d`
 
 **Stop:** `docker compose stop`
@@ -90,13 +102,17 @@ npm run build
 # Set up the app
 cp .env.example .env
 php artisan key:generate
-php artisan app:setup
+php artisan app:setup          # migrations, defaults, and prints a setup token
+
+# Create the first administrator (either option works)
+php artisan user:create --admin
+#   …or use the setup token printed by app:setup on the /setup page
 
 # Start the server
 php artisan serve
 ```
 
-Open **http://localhost:8000** in your browser.
+Open **http://localhost:8000** in your browser and sign in.
 
 For automatic syncing, run this in a separate terminal:
 ```bash
@@ -179,17 +195,38 @@ You can also manually sync anytime by clicking the **Sync** button in the top ba
 
 ## Security
 
-By default, StreamRadar has no login — it's designed for personal use on your local network.
+Authentication is always required — there is no open mode and no default password.
 
-To add password protection:
-1. Go to **Settings** → **Access Control**
-2. Set a username and password
-3. Click **Save**
+**Accounts and roles.** Each person has their own account with one of two roles:
 
-Login will be required in all new browser sessions. To disable it, click **Disable Access Control** or run:
-```bash
-php artisan auth:reset
+- **admin** — full control: settings, user management, tracking, alerts, blacklist, manual sync.
+- **user** — read-only: dashboard, alerts, history.
+
+Admins manage accounts under **Users**, or from the command line (`user:create`, `user:password`, `user:role`, `user:list`, `user:delete`). The last administrator can never be demoted, disabled or deleted, so you cannot lock yourself out.
+
+**First administrator.** Created with the one-time token from `php artisan auth:setup-token` (printed automatically on first Docker start) on the `/setup` page, or directly with `php artisan user:create --admin`. No credentials are ever shipped or defaulted.
+
+**Single sign-on (optional).** StreamRadar speaks OpenID Connect (authorization-code flow with PKCE). Point it at Authentik, Keycloak, Entra ID, Google, etc. with a few environment variables:
+
+```dotenv
+OIDC_ENABLED=true
+OIDC_ISSUER=https://auth.example.com/application/o/streamradar/
+OIDC_CLIENT_ID=...
+OIDC_CLIENT_SECRET=...
+# optional: map an IdP group to the admin role
+OIDC_ADMIN_CLAIM=groups
+OIDC_ADMIN_VALUES=streamradar-admins
 ```
+
+The redirect URI is `https://your-host/auth/oidc/callback`. SSO is additive: local password login stays available (set `AUTH_LOCAL_LOGIN=false` to require SSO), and the `user:*` commands always work, so an unreachable identity provider never locks admins out.
+
+**Lockout protection.** Failed logins are rate-limited per account (progressive lockout) and per IP. Passwords are bcrypt-hashed with a configurable minimum length (`AUTH_PASSWORD_MIN_LENGTH`, default 12).
+
+**Secrets.** API secrets, SMTP passwords, bot tokens and webhook URLs are encrypted at rest, never sent to the browser (only a mask is shown), and never included in exports.
+
+**Outbound webhooks.** Webhook and Discord URLs are validated against SSRF: they must resolve to public addresses, with no redirects and a response-size cap. To target a self-hosted endpoint on your LAN (e.g. ntfy), allow its exact hostname via `WEBHOOK_ALLOWED_HOSTS=ntfy.home.lan`.
+
+**Production hardening.** Keep `APP_ENV=production` and `APP_DEBUG=false` (the app forces both off if misconfigured). Developer tooling (Inertia DevTools) is disabled unless explicitly enabled and is never active in production; its endpoints additionally require an admin session.
 
 ---
 
@@ -250,7 +287,12 @@ To keep StreamRadar running continuously (including after system restarts):
 |---------|-------------|
 | `php artisan streams:sync` | Manually sync all streams |
 | `php artisan app:setup` | Initial setup (migrations + defaults) |
-| `php artisan auth:reset` | Remove password protection |
+| `php artisan auth:setup-token` | Print a one-time token to create the first admin on `/setup` |
+| `php artisan user:create --admin` | Create a user account (admin or user) |
+| `php artisan user:password <email>` | Reset an account's password (recovery) |
+| `php artisan user:role <email> <role>` | Change an account's role |
+| `php artisan user:list` | List accounts |
+| `php artisan user:delete <email>` | Delete an account |
 | `php artisan schedule:work` | Start the scheduler (auto-sync) |
 
 ## License

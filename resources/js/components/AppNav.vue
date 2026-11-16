@@ -1,24 +1,29 @@
 <script setup lang="ts">
 import { Link, usePage, router } from '@inertiajs/vue3';
 import { computed, ref, onMounted, nextTick } from 'vue';
-import { Radio, Bell, LayoutGrid, ShieldBan, Clock, Settings } from 'lucide-vue-next';
+import { Radio, Bell, LayoutGrid, ShieldBan, Clock, Settings, Users } from 'lucide-vue-next';
+import { useAuth } from '@/composables/useAuth';
 import type { Stats } from '@/types';
 
 const props = defineProps<{
     mobile?: boolean;
-    stats: Stats;
+    stats: Stats | null;
 }>();
 
 const page = usePage();
+const { isAdmin } = useAuth();
 const currentPath = computed(() => page.url.split('?')[0]);
 
 const tabs = computed(() => [
-    { name: 'Streams', href: '/', match: '/', icon: Radio, count: props.stats.streams_count },
-    { name: 'Tracking', href: '/tracking', match: '/tracking', icon: LayoutGrid, count: props.stats.categories_count },
-    { name: 'Alerts', href: '/alerts', match: '/alerts', icon: Bell, count: props.stats.alerts_count },
-    { name: 'Blacklist', href: '/blacklist', match: '/blacklist', icon: ShieldBan, count: props.stats.blacklist_count },
+    { name: 'Streams', href: '/', match: '/', icon: Radio, count: props.stats?.streams_count ?? null },
+    { name: 'Tracking', href: '/tracking', match: '/tracking', icon: LayoutGrid, count: props.stats?.categories_count ?? null },
+    { name: 'Alerts', href: '/alerts', match: '/alerts', icon: Bell, count: props.stats?.alerts_count ?? null },
+    { name: 'Blacklist', href: '/blacklist', match: '/blacklist', icon: ShieldBan, count: props.stats?.blacklist_count ?? null },
     { name: 'History', href: '/history', match: '/history', icon: Clock, count: null },
-    { name: 'Settings', href: '/settings', match: '/settings', icon: Settings, count: null },
+    ...(isAdmin.value ? [
+        { name: 'Users', href: '/users', match: '/users', icon: Users, count: null },
+        { name: 'Settings', href: '/settings', match: '/settings', icon: Settings, count: null },
+    ] : []),
 ]);
 
 function isActive(match: string): boolean {

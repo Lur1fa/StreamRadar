@@ -10,6 +10,7 @@ use App\Models\HistoryEvent;
 use App\Models\Setting;
 use App\Models\Stream;
 use App\Models\TrackedChannel;
+use App\Support\Redactor;
 use Illuminate\Support\Facades\Log;
 
 class SyncService
@@ -107,23 +108,32 @@ class SyncService
 
         $this->fetchMissingAvatars();
 
-        // Send all alert notifications in one batch
-        $this->alerts->sendNotifications($allTriggered);
+        // Send all alert notifications in one batch. Notification delivery is
+        // best-effort: whatever happens inside, the sync state below is always
+        // recorded so the scheduler never gets stuck on a failing provider.
+        try {
+            $this->alerts->sendNotifications($allTriggered);
+        } catch (\Throwable $e) {
+            Log::error('Alert notification dispatch failed', [
+                'exception' => $e::class,
+                'error' => Redactor::message($e->getMessage()),
+            ]);
+        } finally {
+            Setting::set('last_sync_at', now()->toIso8601String());
 
-        Setting::set('last_sync_at', now()->toIso8601String());
+            $duration = round(microtime(true) - $start, 2);
 
-        $duration = round(microtime(true) - $start, 2);
-
-        HistoryEvent::create([
-            'type' => 'sync_completed',
-            'metadata' => [
-                'new' => $totals['new'],
-                'updated' => $totals['updated'],
-                'ended' => $endedCount,
-                'alerts' => $totals['alerts'],
-                'duration' => $duration,
-            ],
-        ]);
+            HistoryEvent::create([
+                'type' => 'sync_completed',
+                'metadata' => [
+                    'new' => $totals['new'],
+                    'updated' => $totals['updated'],
+                    'ended' => $endedCount,
+                    'alerts' => $totals['alerts'],
+                    'duration' => $duration,
+                ],
+            ]);
+        }
 
         return new SyncResult(
             newStreams: $totals['new'],
@@ -148,7 +158,7 @@ class SyncService
         try {
             $twitchStreams = $this->twitch->getAllStreamsForCategory($category->twitch_id);
         } catch (\Exception $e) {
-            Log::error("Failed to fetch streams for category {$category->name}: ".$e->getMessage());
+            Log::error("Failed to fetch streams for category {$category->name}: ".Redactor::message($e->getMessage()));
 
             return ['new' => 0, 'updated' => 0, 'alerts' => 0, 'stream_ids' => [], 'all_api_ids' => [], 'triggered_alerts' => []];
         }
@@ -253,7 +263,7 @@ class SyncService
         try {
             $twitchStreams = $this->twitch->getStreamsByUsers($logins);
         } catch (\Exception $e) {
-            Log::error('Failed to fetch tracked channel streams: '.$e->getMessage());
+            Log::error('Failed to fetch tracked channel streams: '.Redactor::message($e->getMessage()));
 
             return ['new' => 0, 'updated' => 0, 'alerts' => 0, 'stream_ids' => [], 'all_api_ids' => [], 'triggered_alerts' => []];
         }
@@ -431,7 +441,7 @@ class SyncService
                 }
             }
         } catch (\Exception $e) {
-            Log::warning('Failed to fetch avatars: '.$e->getMessage());
+            Log::warning('Failed to fetch avatars: '.Redactor::message($e->getMessage()));
         }
     }
 }

@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\Setting;
+use App\Services\Auth\SetupTokenService;
 use Illuminate\Console\Command;
 
 class SetupCommand extends Command
@@ -11,13 +12,13 @@ class SetupCommand extends Command
 
     protected $description = 'Initial setup for StreamRadar';
 
-    public function handle(): int
+    public function handle(SetupTokenService $setup): int
     {
         $this->info('Setting up StreamRadar...');
 
         // Create SQLite database if missing
         $dbPath = database_path('database.sqlite');
-        if (! file_exists($dbPath)) {
+        if (config('database.default') === 'sqlite' && ! file_exists($dbPath)) {
             touch($dbPath);
             $this->info('Created SQLite database.');
         }
@@ -42,7 +43,12 @@ class SetupCommand extends Command
 
         $this->info('Default settings initialized.');
         $this->newLine();
-        $this->info('StreamRadar is ready! Configure your Twitch API keys in Settings.');
+
+        if ($setup->isSetupRequired()) {
+            $this->call('auth:setup-token');
+        } else {
+            $this->info('StreamRadar is ready! Sign in and configure your Twitch API keys in Settings.');
+        }
 
         return self::SUCCESS;
     }

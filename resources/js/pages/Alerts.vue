@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useAuth } from '@/composables/useAuth';
+const { isAdmin } = useAuth();
 import { ref, computed, watch } from 'vue';
 import { router, useForm } from '@inertiajs/vue3';
 import { Plus, Bell, Trash2, CheckCircle, XCircle, X, AlertTriangle, Pencil, ChevronDown } from 'lucide-vue-next';
@@ -148,7 +150,7 @@ function unconfiguredWarnings(f: { notify_email: boolean; notify_discord: boolea
     <AppLayout>
         <div class="flex items-center justify-between mb-6">
             <h2 class="text-xl font-bold text-gray-900 dark:text-white">Alert Rules</h2>
-            <button @click="showForm = !showForm; if (!showForm) resetForm(); editingId = null"
+            <button v-if="isAdmin" @click="showForm = !showForm; if (!showForm) resetForm(); editingId = null"
                 class="px-4 py-2 text-sm font-medium bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors flex items-center gap-1.5">
                 <Plus v-if="!showForm" class="w-4 h-4" />
                 <X v-else class="w-4 h-4" />
@@ -347,15 +349,15 @@ function unconfiguredWarnings(f: { notify_email: boolean; notify_discord: boolea
                         </div>
                     </div>
                     <div class="flex items-center gap-1 shrink-0">
-                        <button @click="editingId === rule.id ? editingId = null : startEdit(rule)"
+                        <button v-if="isAdmin" @click="editingId === rule.id ? editingId = null : startEdit(rule)"
                             class="p-2 text-gray-400 hover:text-purple-600 dark:hover:text-purple-400 rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-800 transition-colors">
                             <Pencil class="w-4 h-4" />
                         </button>
-                        <button @click="toggleActive(rule)" :class="['p-2 rounded-lg transition-colors', rule.is_active ? 'text-green-500 hover:bg-green-50 dark:hover:bg-green-500/10' : 'text-gray-400 hover:bg-gray-50 dark:hover:bg-zinc-800']">
+                        <button v-if="isAdmin" @click="toggleActive(rule)" :class="['p-2 rounded-lg transition-colors', rule.is_active ? 'text-green-500 hover:bg-green-50 dark:hover:bg-green-500/10' : 'text-gray-400 hover:bg-gray-50 dark:hover:bg-zinc-800']">
                             <CheckCircle v-if="rule.is_active" class="w-4 h-4" />
                             <XCircle v-else class="w-4 h-4" />
                         </button>
-                        <button @click="deletingRule = rule" class="p-2 text-gray-400 hover:text-red-600 dark:hover:text-red-400 rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-800 transition-colors">
+                        <button v-if="isAdmin" @click="deletingRule = rule" class="p-2 text-gray-400 hover:text-red-600 dark:hover:text-red-400 rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-800 transition-colors">
                             <Trash2 class="w-4 h-4" />
                         </button>
                     </div>

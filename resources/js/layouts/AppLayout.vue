@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { Link, usePage, router } from '@inertiajs/vue3';
 import { computed, ref, onMounted, onUnmounted } from 'vue';
-import { RefreshCw, Menu, X, Radar, LogOut } from 'lucide-vue-next';
+import { RefreshCw, Menu, X, Radar, LogOut, UserCircle } from 'lucide-vue-next';
 import AppNav from '@/components/AppNav.vue';
 import ThemeToggle from '@/components/ThemeToggle.vue';
 import FlashMessage from '@/components/FlashMessage.vue';
 import { useNow } from '@/composables/useNow';
+import { useAuth } from '@/composables/useAuth';
 import type { PageProps } from '@/types';
 
 const page = usePage<PageProps>();
@@ -14,7 +15,7 @@ const appSettings = computed(() => page.props.appSettings);
 const stats = computed(() => page.props.stats);
 const syncing = ref(false);
 const mobileMenuOpen = ref(false);
-const isAuthEnabled = computed(() => !!appSettings.value?.auth_enabled);
+const { user, isAdmin } = useAuth();
 
 function triggerSync() {
     syncing.value = true;
@@ -75,9 +76,10 @@ function formatLastSync(iso: string | null): string {
 
                     <div class="flex items-center gap-3">
                         <span class="text-xs text-gray-400 dark:text-zinc-500 hidden sm:block">
-                            {{ formatLastSync(appSettings.last_sync_at) }}
+                            {{ formatLastSync(appSettings?.last_sync_at ?? null) }}
                         </span>
                         <button
+                            v-if="isAdmin"
                             @click="triggerSync"
                             :disabled="syncing"
                             class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-all
@@ -89,7 +91,11 @@ function formatLastSync(iso: string | null): string {
                             <span class="hidden sm:inline">Scan</span>
                         </button>
                         <ThemeToggle />
-                        <button v-if="isAuthEnabled" @click="router.post('/logout')"
+                        <Link href="/account" class="hidden sm:inline-flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium text-gray-500 hover:text-gray-700 hover:bg-gray-100 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:bg-zinc-800 rounded-lg transition-colors" v-tooltip="'Account'">
+                            <UserCircle class="w-4 h-4" />
+                            <span class="max-w-[10rem] truncate">{{ user?.name }}</span>
+                        </Link>
+                        <button @click="router.post('/logout')"
                             class="p-2 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-gray-100 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:bg-zinc-800 transition-colors" v-tooltip="'Sign out'">
                             <LogOut class="w-5 h-5" />
                         </button>
@@ -122,6 +128,7 @@ function formatLastSync(iso: string | null): string {
             <div v-if="mobileMenuOpen" class="fixed inset-y-0 left-0 z-30 w-64 bg-white dark:bg-zinc-900 shadow-xl sm:hidden overflow-y-auto">
                 <div class="p-4 pt-20">
                     <AppNav :mobile="true" :stats="stats" />
+                    <Link href="/account" class="mt-3 flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-600 dark:text-zinc-400 hover:bg-gray-50 dark:hover:bg-zinc-800"><UserCircle class="w-4 h-4" /> {{ user?.name }}</Link>
                 </div>
             </div>
         </Transition>

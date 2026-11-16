@@ -74,7 +74,16 @@ docker compose exec streamradar php artisan auth:setup-token
 
 Open the app, go to the setup page, and paste the token to create your admin account. Prefer the command line? Run `docker compose exec streamradar php artisan user:create --admin`.
 
-**Access from other devices.** By default the container is published on `127.0.0.1` only. To expose it on your LAN set `APP_BIND=0.0.0.0` in `.env` (ideally behind a TLS reverse proxy, with `APP_URL=https://…` so the session cookie is marked `Secure`).
+**Access from other devices.** By default the container is published on `127.0.0.1` only. To expose it on your LAN set `APP_BIND=0.0.0.0` in `.env` (ideally behind a TLS reverse proxy).
+
+**Behind a TLS reverse proxy** set both of these in `.env`, then run `docker compose up -d`:
+
+```
+APP_URL=https://streamradar.example.com
+TRUSTED_PROXIES=172.16.0.0/12
+```
+
+With an `https://` `APP_URL`, every link and redirect (including the SSO callback address) is built from that URL and the session cookie is marked `Secure`, so the app is only usable through that address, not by IP over plain HTTP. `TRUSTED_PROXIES` (IPs or CIDR ranges of your proxy) lets the app see the real client IP for login throttling and logs.
 
 **Change the port** (e.g. to 3000): add `APP_PORT=3000` to `.env` file, then run `docker compose up -d`
 

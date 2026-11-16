@@ -13,6 +13,9 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // An https:// APP_URL is authoritative for every URL the app builds.
+        $middleware->prepend(\App\Http\Middleware\UseConfiguredOrigin::class);
+
         $middleware->web(append: [
             \App\Http\Middleware\HandleInertiaRequests::class,
         ]);
@@ -24,6 +27,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->redirectUsersTo('/');
 
         // Only trust X-Forwarded-* headers from explicitly configured proxies.
+        // Needed for the real client IP (login throttling, logs) behind a proxy.
         if ($proxies = env('TRUSTED_PROXIES')) {
             $middleware->trustProxies(at: $proxies === '*' ? '*' : array_map('trim', explode(',', $proxies)));
         }

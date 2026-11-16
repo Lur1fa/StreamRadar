@@ -119,6 +119,17 @@ test('logout ends the session', function () {
     expect(auth()->check())->toBeFalse();
 });
 
+test('logout from the app answers with a full page navigation', function () {
+    $this->actingAs(User::factory()->create());
+
+    // The sign-out button is an Inertia (XHR) request. A plain redirect would
+    // be followed inside the XHR, which breaks for cross-origin targets.
+    $this->post('/logout', [], ['X-Inertia' => 'true'])
+        ->assertStatus(409)
+        ->assertHeader('X-Inertia-Location', route('login'));
+    expect(auth()->check())->toBeFalse();
+});
+
 test('local login can be disabled entirely', function () {
     config(['security.local_login' => false]);
     User::factory()->create(['email' => 'user@example.com']);

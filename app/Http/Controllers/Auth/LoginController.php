@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
 use Inertia\Response;
+use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
 class LoginController extends Controller
 {
@@ -96,7 +97,14 @@ class LoginController extends Controller
         return redirect()->intended('/');
     }
 
-    public function logout(Request $request): RedirectResponse
+    /**
+     * The sign-out button posts through Inertia (XHR). An XHR cannot follow a
+     * redirect to another origin (the provider's end-session endpoint), so the
+     * target is returned as an Inertia location response, which makes the
+     * browser do a full page navigation. Leaving through a full page load also
+     * drops any client-side state of the signed-out user.
+     */
+    public function logout(Request $request): SymfonyResponse
     {
         $provider = $request->session()->get('auth.provider');
         $idToken = $request->session()->get('oidc.id_token');
@@ -108,11 +116,11 @@ class LoginController extends Controller
         if ($provider === 'oidc') {
             $endSession = $this->oidc->endSessionUrl(is_string($idToken) ? $idToken : null, route('login'));
             if ($endSession) {
-                return redirect()->away($endSession);
+                return Inertia::location($endSession);
             }
         }
 
-        return redirect()->route('login');
+        return Inertia::location(route('login'));
     }
 
     private function humanSeconds(int $seconds): string

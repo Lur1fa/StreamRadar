@@ -3,7 +3,9 @@ services:
     build: .
     ports:
       # Bound to loopback by default. Set APP_BIND=0.0.0.0 in .env to expose on
-      # the network (put a TLS reverse proxy in front and set APP_URL=https://…).
+      # the network. Put a TLS reverse proxy in front and set APP_URL=https://…
+      # (all links and redirects are then built from APP_URL) and TRUSTED_PROXIES
+      # (so the real client IP is seen).
       - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8080}:80"
     volumes:
       - ./database:/app/database:z

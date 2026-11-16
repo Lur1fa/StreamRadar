@@ -206,7 +206,7 @@ class OidcService
         $claims = $this->verifyIdToken($idToken, $flow['nonce']);
 
         $accessToken = $response->json('access_token');
-        if (is_string($accessToken) && ! empty($discovery['userinfo_endpoint']) && (empty($claims['email']) || ! isset($claims['email_verified']))) {
+        if (is_string($accessToken) && ! empty($discovery['userinfo_endpoint']) && $this->needsUserinfo($claims)) {
             $claims = array_merge($claims, $this->userinfo($discovery['userinfo_endpoint'], $accessToken, (string) $claims['sub']));
         }
 
@@ -401,6 +401,11 @@ class OidcService
         }
 
         $claimName = (string) config('oidc.admin_claim', 'groups');
+
+        if ($adminValues !== [] && ! array_key_exists($claimName, $identity->claims)) {
+            Log::warning("OIDC role mapping: the provider sent no [{$claimName}] claim, so nobody can be mapped to admin by it. Check that OIDC_SCOPES requests the scope that releases this claim (often \"groups\") and that the client is allowed to use that scope.");
+        }
+
         $claim = $identity->claims[$claimName] ?? [];
         $claimValues = is_array($claim) ? $claim : [$claim];
         $claimValues = array_map(fn ($v) => is_scalar($v) ? (string) $v : '', $claimValues);
@@ -420,6 +425,22 @@ class OidcService
         }
 
         $user->forceFill(['role' => $target])->save();
+    }
+
+    /**
+     * The ID token is not required to carry profile claims: many providers
+     * release e-mail and group membership from the userinfo endpoint only.
+     *
+     * @param  array<string, mixed>  $claims
+     */
+    private function needsUserinfo(array $claims): bool
+    {
+        if (empty($claims['email']) || ! isset($claims['email_verified'])) {
+            return true;
+        }
+
+        return (array) config('oidc.admin_values', []) !== []
+            && ! array_key_exists((string) config('oidc.admin_claim', 'groups'), $claims);
     }
 
     private function userinfo(string $endpoint, string $accessToken, string $expectedSub): array

@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Session\ArraySessionHandler;
 use Illuminate\Session\Store;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 const ISSUER = 'https://idp.example.test';
 
@@ -241,6 +242,40 @@ test('group claims can map a user to the admin role', function () {
 
     $user = $service->resolveUser($service->handleCallback($callback));
     expect($user->role)->toBe('admin');
+});
+
+test('the admin group is honoured when the provider only releases it from userinfo', function () {
+    $kp = oidcKeypair();
+    app()->instance('oidc_test_jwk', $kp['jwk']);
+    configureOidc($kp['jwk'], ['oidc.admin_claim' => 'groups', 'oidc.admin_values' => ['admins']]);
+
+    // The ID token has e-mail but no groups; they come from the userinfo endpoint.
+    $store = freshStore();
+    $service = driveOidc($store, $kp['private']);
+    Http::fake([ISSUER.'/userinfo' => Http::response(['sub' => 'subject-123', 'groups' => ['admins']])]);
+    $callback = Request::create('/auth/oidc/callback', 'GET', ['state' => $store->get('__state'), 'code' => 'c']);
+    $callback->setLaravelSession($store);
+
+    $user = $service->resolveUser($service->handleCallback($callback));
+    expect($user->role)->toBe('admin');
+});
+
+test('a missing role claim is logged so a forgotten scope is easy to spot', function () {
+    $kp = oidcKeypair();
+    app()->instance('oidc_test_jwk', $kp['jwk']);
+    configureOidc($kp['jwk'], ['oidc.admin_claim' => 'groups', 'oidc.admin_values' => ['admins']]);
+    Log::spy();
+
+    $store = freshStore();
+    $service = driveOidc($store, $kp['private']);
+    Http::fake([ISSUER.'/userinfo' => Http::response(['sub' => 'subject-123'])]);
+    $callback = Request::create('/auth/oidc/callback', 'GET', ['state' => $store->get('__state'), 'code' => 'c']);
+    $callback->setLaravelSession($store);
+
+    $user = $service->resolveUser($service->handleCallback($callback));
+
+    expect($user->role)->toBe('user');
+    Log::shouldHaveReceived('warning')->withArgs(fn ($message) => str_contains($message, 'no [groups] claim'))->once();
 });
 
 function parseState(Request $authReq, OidcService $service, Store $store): string

@@ -24,24 +24,29 @@ class StreamAlertMail extends Mailable
 {
     use Queueable, SerializesModels;
 
-    /** @param array<array{rule: AlertRule, stream: Stream}> $alerts */
+    /**
+     * @param  array<array{rule: AlertRule, stream: Stream}>  $alerts
+     * @param  string|null  $subjectPrefix  Replaces "[StreamRadar]" at the start of the subject.
+     */
     public function __construct(
         public array $alerts,
+        public ?string $subjectPrefix = null,
     ) {}
 
     public function envelope(): Envelope
     {
         $grouped = $this->groupByStream();
         $count = count($grouped);
+        $prefix = trim((string) $this->subjectPrefix) !== '' ? trim((string) $this->subjectPrefix) : '[StreamRadar]';
 
         if ($count === 1) {
             $stream = $grouped[0]['stream'];
             $ruleNames = implode(', ', $grouped[0]['rules']);
-            $subject = "[StreamRadar] {$stream->user_name} is live — {$ruleNames}";
+            $subject = "{$prefix} {$stream->user_name} is live — {$ruleNames}";
         } else {
             $names = array_slice(array_map(fn ($g) => $g['stream']->user_name, $grouped), 0, 3);
             $label = implode(', ', $names).($count > 3 ? ' +'.($count - 3).' more' : '');
-            $subject = "[StreamRadar] {$count} streams are live — {$label}";
+            $subject = "{$prefix} {$count} streams are live — {$label}";
         }
 
         return new Envelope(subject: self::sanitizeHeader($subject));

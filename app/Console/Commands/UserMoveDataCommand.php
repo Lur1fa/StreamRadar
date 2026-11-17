@@ -53,7 +53,8 @@ class UserMoveDataCommand extends Command
         $this->table(['What', 'Rows'], $this->rows($moving));
 
         if ($replace && ($losing = array_filter($accounts->counts($to))) !== []) {
-            unset($losing['settings']); // settings are replaced key by key, not deleted
+            // Settings are replaced key by key and destinations added; neither is deleted.
+            unset($losing['settings'], $losing['notification_destinations']);
             if ($losing !== []) {
                 $this->warn("This DELETES the data {$to->email} has now:");
                 $this->table(['What', 'Rows'], $this->rows($losing));
@@ -85,9 +86,10 @@ class UserMoveDataCommand extends Command
             'tracked_channels' => 'Tracked channels',
             'blacklist_rules' => 'Blacklist entries',
             'alert_rules' => 'Alerts',
+            'notification_destinations' => 'Alert destinations',
             'streams' => 'Live streams',
             'history_events' => 'History events',
-            'settings' => 'Account settings (filters, alert destinations)',
+            'settings' => 'Account settings (filters, appearance)',
         ];
 
         $rows = [];

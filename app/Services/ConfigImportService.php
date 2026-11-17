@@ -2,14 +2,20 @@
 
 namespace App\Services;
 
+use App\Http\Requests\NotificationDestinationRequest;
 use App\Http\Requests\UpdateSettingsRequest;
 use App\Models\AlertRule;
 use App\Models\BlacklistRule;
 use App\Models\Category;
+use App\Models\NotificationDestination;
 use App\Models\Setting;
 use App\Models\TagFilter;
 use App\Models\TrackedChannel;
 use App\Models\User;
+use App\Rules\SafeWebhookUrl;
+use App\Services\Notifications\DestinationType;
+use App\Services\Notifications\LegacyDestinations;
+use Illuminate\Validation\Rule;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
@@ -27,21 +33,23 @@ class ConfigImportService
     public function __construct(private AlertTemplateValidator $templates) {}
 
     /**
+     * Import into one account. Tracking, blacklist, alerts and destinations
+     * become that account's own; installation settings in the file are
+     * applied only when the account is an administrator.
+     *
+     * A backup never contains secrets, so an imported destination that needs
+     * a token or URL is listed as incomplete until it is entered.
+     *
      * @return array<string, int> counts per section
      *
      * @throws ValidationException
-     */
-    /**
-     * Import into one account. Tracking, blacklist and alerts become that
-     * account's own; installation settings in the file are applied only when
-     * the account is an administrator.
      */
     public function import(array $data, User $owner): array
     {
         $validated = $this->validate($data);
 
         return DB::transaction(function () use ($validated, $owner) {
-            $counts = ['settings' => 0, 'categories' => 0, 'channels' => 0, 'blacklist' => 0, 'tag_filters' => 0, 'alerts' => 0];
+            $counts = ['settings' => 0, 'categories' => 0, 'channels' => 0, 'blacklist' => 0, 'tag_filters' => 0, 'alerts' => 0, 'destinations' => 0];
 
             $settings = array_intersect_key(
                 UpdateSettingsRequest::normalize($validated['settings'] ?? []),
@@ -92,6 +100,19 @@ class ConfigImportService
                 }
             }
 
+            foreach ($validated['destinations'] ?? [] as $destination) {
+                // Matched by name and type, so a destination's stored secrets survive a re-import.
+                NotificationDestination::updateOrCreateFor($owner,
+                    ['name' => $destination['name'], 'type' => $destination['type']],
+                    ['enabled' => $destination['enabled'] ?? true, 'config' => $destination['config']]);
+                $counts['destinations']++;
+            }
+
+            // Backups made before destinations existed carry them as settings.
+            if (! empty($validated['legacy_destinations'])) {
+                $counts['destinations'] += LegacyDestinations::import($owner->id, $validated['legacy_destinations']);
+            }
+
             return $counts;
         });
     }
@@ -101,7 +122,7 @@ class ConfigImportService
      */
     public function validate(array $data): array
     {
-        $unknown = array_diff(array_keys($data), ['settings', 'categories', 'channels', 'blacklist', 'tag_filters', 'alerts', 'exported_at', 'format', 'app']);
+        $unknown = array_diff(array_keys($data), ['settings', 'categories', 'channels', 'blacklist', 'tag_filters', 'alerts', 'destinations', 'exported_at', 'format', 'app']);
         if ($unknown !== []) {
             throw ValidationException::withMessages(['file' => 'Unsupported section(s): '.implode(', ', array_map('strval', $unknown))]);
         }
@@ -169,16 +190,28 @@ class ConfigImportService
             'alerts.*.notify_discord' => ['sometimes', 'boolean'],
             'alerts.*.notify_telegram' => ['sometimes', 'boolean'],
             'alerts.*.notify_webhook' => ['sometimes', 'boolean'],
+            'alerts.*.notify_ntfy' => ['sometimes', 'boolean'],
             'alerts.*.notify_on_category_change' => ['sometimes', 'boolean'],
             'alerts.*.notify_on_stream_start' => ['sometimes', 'boolean'],
             'alerts.*.is_active' => ['sometimes', 'boolean'],
             'alerts.*.notification_template' => ['nullable', 'array'],
+
+            'destinations' => ['sometimes', 'array', 'max:100'],
+            'destinations.*.name' => ['required', 'string', 'max:100', 'regex:/^[^\x00-\x1F\x7F]*$/'],
+            'destinations.*.type' => ['required', Rule::enum(DestinationType::class)],
+            'destinations.*.enabled' => ['sometimes', 'boolean'],
+            'destinations.*.config' => ['nullable', 'array'],
         ];
 
         $validated = Validator::make($data, $rules)->validate();
 
         if (isset($data['settings'])) {
             $settings = is_array($data['settings']) ? $data['settings'] : [];
+
+            $legacy = array_intersect_key($settings, array_flip(LegacyDestinations::KEYS));
+            $settings = array_diff_key($settings, $legacy);
+            $validated['legacy_destinations'] = $this->validateLegacyDestinations($legacy);
+
             $unknownKeys = array_diff(array_keys($settings), Setting::MANAGED_KEYS);
             if ($unknownKeys !== []) {
                 throw ValidationException::withMessages(['settings' => 'Unsupported setting(s): '.implode(', ', array_map('strval', $unknownKeys))]);
@@ -194,6 +227,10 @@ class ConfigImportService
             $validated['settings'] = Validator::make($settings, UpdateSettingsRequest::settingRules())->validate();
         }
 
+        foreach ($validated['destinations'] ?? [] as $i => $destination) {
+            $validated['destinations'][$i] = $this->validateDestination($destination);
+        }
+
         foreach ($validated['alerts'] ?? [] as $i => $alert) {
             try {
                 $this->templates->validate($alert['notification_template'] ?? null);
@@ -203,12 +240,86 @@ class ConfigImportService
         }
 
         // Explicitly drop anything that did not pass through a rule (e.g. extra keys per item).
-        foreach (['categories', 'channels', 'blacklist', 'tag_filters', 'alerts'] as $section) {
+        foreach (['categories', 'channels', 'blacklist', 'tag_filters', 'alerts', 'destinations'] as $section) {
             if (isset($validated[$section])) {
                 $validated[$section] = array_values($validated[$section]);
             }
         }
 
         return $validated;
+    }
+
+    /**
+     * One destination of a backup: its plain settings go through the same
+     * rules as the Settings page.
+     *
+     * @param  array<string, mixed>  $destination
+     * @return array{name: string, type: string, enabled: bool, config: array<string, mixed>}
+     *
+     * @throws ValidationException
+     */
+    private function validateDestination(array $destination): array
+    {
+        $type = DestinationType::from($destination['type']);
+        $config = array_intersect_key((array) ($destination['config'] ?? []), array_flip($type->configKeys()));
+
+        $validator = Validator::make($config, NotificationDestinationRequest::configRules($type, ''));
+        if ($validator->fails()) {
+            throw ValidationException::withMessages(['destinations' => 'Destination "'.$destination['name'].'": '.$validator->errors()->first()]);
+        }
+
+        foreach ($type->configKeys() as $key) {
+            $value = $config[$key] ?? null;
+            $config[$key] = in_array($key, ['headers', 'query'], true)
+                ? array_values(array_filter((array) $value, 'is_string'))
+                : (is_scalar($value) ? (string) $value : '');
+        }
+
+        return [
+            'name' => $destination['name'],
+            'type' => $type->value,
+            'enabled' => (bool) ($destination['enabled'] ?? true),
+            'config' => $config,
+        ];
+    }
+
+    /**
+     * Destination settings of a backup made before destinations existed,
+     * with the rules those settings had.
+     *
+     * @param  array<string, mixed>  $legacy
+     * @return array<string, string|null>
+     *
+     * @throws ValidationException
+     */
+    private function validateLegacyDestinations(array $legacy): array
+    {
+        foreach ($legacy as $key => $value) {
+            if (! is_scalar($value) && $value !== null) {
+                throw ValidationException::withMessages(["settings.{$key}" => 'Setting values must be scalar.']);
+            }
+            if (UpdateSettingsRequest::looksMasked($value)) {
+                unset($legacy[$key]);
+            }
+        }
+
+        $validated = Validator::make($legacy, [
+            'mail_to' => ['nullable', 'email:rfc', 'max:255'],
+            'discord_webhook_url' => ['nullable', 'string', 'max:2048', SafeWebhookUrl::discord()],
+            'telegram_bot_token' => ['nullable', 'string', 'max:255', 'regex:/^\d{3,}:[A-Za-z0-9_\-]{10,}$/'],
+            'telegram_chat_id' => ['nullable', 'string', 'max:64', 'regex:/^-?\d+$/'],
+            'webhook_url' => ['nullable', 'string', 'max:2048', new SafeWebhookUrl],
+            'webhook_format' => ['nullable', 'in:json,ntfy'],
+            'notifications_email_enabled' => ['nullable', 'boolean'],
+            'notifications_discord_enabled' => ['nullable', 'boolean'],
+            'notifications_telegram_enabled' => ['nullable', 'boolean'],
+            'notifications_webhook_enabled' => ['nullable', 'boolean'],
+        ])->validate();
+
+        return array_map(fn ($value) => match (true) {
+            is_bool($value) => $value ? '1' : '0',
+            $value === null => null,
+            default => (string) $value,
+        }, $validated);
     }
 }

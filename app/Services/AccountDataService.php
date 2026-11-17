@@ -2,9 +2,11 @@
 
 namespace App\Services;
 
+use App\Models\NotificationDestination;
 use App\Models\Setting;
 use App\Models\User;
 use App\Models\UserSetting;
+use App\Services\Notifications\LegacyDestinations;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
@@ -20,7 +22,14 @@ class AccountDataService
     /** What the sync derives from that configuration. */
     public const DERIVED_TABLES = ['streams', 'history_events'];
 
-    public const TABLES = [...self::CONFIG_TABLES, ...self::DERIVED_TABLES];
+    /**
+     * Where the account's alerts go. Treated like its settings: moved along
+     * with the rest, kept when a move replaces the target's data, and never
+     * a reason to refuse a move.
+     */
+    public const DESTINATION_TABLES = ['notification_destinations'];
+
+    public const TABLES = [...self::CONFIG_TABLES, ...self::DESTINATION_TABLES, ...self::DERIVED_TABLES];
 
     public function hasOrphans(): bool
     {
@@ -30,7 +39,7 @@ class AccountDataService
             }
         }
 
-        return DB::table('settings')->whereIn('key', Setting::ACCOUNT_KEYS)->exists();
+        return DB::table('settings')->whereIn('key', [...Setting::ACCOUNT_KEYS, ...LegacyDestinations::KEYS])->exists();
     }
 
     /**
@@ -67,7 +76,20 @@ class AccountDataService
             DB::table('settings')->whereIn('key', Setting::ACCOUNT_KEYS)->delete();
             $counts['settings'] = $legacy->count();
 
+            // Alert destinations of that time were settings keys; they become destinations.
+            $old = DB::table('settings')->whereIn('key', LegacyDestinations::KEYS)->get();
+            if ($old->isNotEmpty()) {
+                $values = [];
+                foreach ($old as $row) {
+                    $values[$row->key] = LegacyDestinations::decode($row->key, $row->value);
+                    Cache::forget("setting.{$row->key}");
+                }
+                $counts['notification_destinations'] = LegacyDestinations::import($user->id, $values);
+                DB::table('settings')->whereIn('key', LegacyDestinations::KEYS)->delete();
+            }
+
             UserSetting::flushSecretCache();
+            NotificationDestination::flushSecretCache();
 
             return $counts;
         });
@@ -135,6 +157,7 @@ class AccountDataService
             $counts['settings'] = DB::table('user_settings')->where('user_id', $from->id)->update(['user_id' => $to->id]);
 
             UserSetting::flushSecretCache();
+            NotificationDestination::flushSecretCache();
 
             return $counts;
         });
@@ -144,13 +167,15 @@ class AccountDataService
     {
         DB::transaction(function () use ($user, $includingSettings) {
             // stream_alert_tracking rows go with their alert rule (cascade).
-            foreach (array_reverse(self::TABLES) as $table) {
+            foreach (array_reverse([...self::CONFIG_TABLES, ...self::DERIVED_TABLES]) as $table) {
                 DB::table($table)->where('owner_id', $user->id)->delete();
             }
 
             if ($includingSettings) {
                 DB::table('user_settings')->where('user_id', $user->id)->delete();
+                DB::table('notification_destinations')->where('owner_id', $user->id)->delete();
                 UserSetting::flushSecretCache();
+                NotificationDestination::flushSecretCache();
             }
         });
     }

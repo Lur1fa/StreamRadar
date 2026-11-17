@@ -108,6 +108,11 @@ class User extends Authenticatable
         return $this->hasMany(Stream::class, 'owner_id');
     }
 
+    public function notificationDestinations(): HasMany
+    {
+        return $this->hasMany(NotificationDestination::class, 'owner_id');
+    }
+
     public function settings(): HasMany
     {
         return $this->hasMany(UserSetting::class);

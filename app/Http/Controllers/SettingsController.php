@@ -6,20 +6,18 @@ use App\Http\Requests\UpdateSettingsRequest;
 use App\Models\AlertRule;
 use App\Models\BlacklistRule;
 use App\Models\Category;
+use App\Models\NotificationDestination;
 use App\Models\Setting;
 use App\Models\TagFilter;
 use App\Models\TrackedChannel;
 use App\Models\UserSetting;
-use App\Services\AlertService;
 use App\Services\ConfigImportService;
-use App\Services\Http\SafeHttpClient;
 use App\Services\TwitchApiService;
 use App\Support\Redactor;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -27,10 +25,11 @@ use Throwable;
 
 /**
  * The Settings page serves two audiences. Every account reads and writes its
- * own settings (default filters, appearance, where its alerts are delivered)
- * and can test its own destinations. The installation's settings (Twitch API
- * keys, scanning, SMTP server), the Twitch test, the update check and the
- * backup are administrator-only (see routes/web.php and UpdateSettingsRequest).
+ * own settings (default filters, appearance) and manages where its alerts go
+ * (NotificationDestinationController). The installation's settings (Twitch
+ * API keys, scanning, SMTP server), the Twitch test, the update check and
+ * the backup are administrator-only (see routes/web.php and
+ * UpdateSettingsRequest).
  *
  * Secret handling: secrets never leave the server. The page receives only
  * `<key>_set` / `<key>_masked`; updates ignore empty or masked values; the
@@ -49,6 +48,8 @@ class SettingsController extends Controller
 
         return Inertia::render('Settings', [
             'settings' => $settings,
+            'destinations' => NotificationDestination::ownedBy($user)->orderBy('id')->get()
+                ->map(fn (NotificationDestination $d) => $d->toBrowser())->values(),
             // Twitch is asked once per category, however many accounts track it.
             'activeCategoriesCount' => $user->isAdmin() ? Category::where('is_active', true)->distinct()->count('twitch_id') : 0,
             // Internal host names: shown in the administrators' Access section only.
@@ -102,10 +103,10 @@ class SettingsController extends Controller
         $exportable = Setting::exportableKeys();
 
         return response()->json([
-            'format' => 2,
+            'format' => 3,
             'app' => 'StreamRadar',
             'exported_at' => now()->toIso8601String(),
-            // Never includes secrets (Twitch secret, SMTP password, bot token, webhook URLs).
+            // Never includes secrets (Twitch secret, SMTP password, destination credentials).
             'settings' => [
                 ...Setting::getMany(array_values(array_intersect($exportable, Setting::SERVER_KEYS))),
                 ...UserSetting::getMany($user, array_values(array_intersect($exportable, Setting::ACCOUNT_KEYS))),
@@ -114,6 +115,13 @@ class SettingsController extends Controller
             'channels' => TrackedChannel::ownedBy($user)->get(['twitch_user_id', 'user_login', 'user_name', 'profile_image_url', 'is_active'])->toArray(),
             'blacklist' => BlacklistRule::ownedBy($user)->get(['type', 'value', 'twitch_user_id', 'profile_image_url'])->toArray(),
             'tag_filters' => TagFilter::ownedBy($user)->get(['tag', 'min_viewers', 'min_avg_viewers', 'languages', 'keywords'])->toArray(),
+            // Without their secrets: a restored destination may need its token or URL again.
+            'destinations' => NotificationDestination::ownedBy($user)->orderBy('id')->get()->map(fn (NotificationDestination $d) => [
+                'name' => $d->name,
+                'type' => $d->type->value,
+                'enabled' => $d->enabled,
+                'config' => $d->publicConfig(),
+            ])->toArray(),
             'alerts' => AlertRule::ownedBy($user)->with('category')->get()->map(function ($rule) use ($user) {
                 $categoryMap = Category::ownedBy($user)->whereIn('id', $rule->category_ids ?? [])->pluck('twitch_id')->toArray();
 
@@ -132,6 +140,7 @@ class SettingsController extends Controller
                     'notify_discord' => $rule->notify_discord,
                     'notify_telegram' => $rule->notify_telegram,
                     'notify_webhook' => $rule->notify_webhook,
+                    'notify_ntfy' => $rule->notify_ntfy,
                     'notify_on_category_change' => $rule->notify_on_category_change,
                     'notify_on_stream_start' => $rule->notify_on_stream_start,
                     'notification_template' => $rule->notification_template,
@@ -179,247 +188,6 @@ class SettingsController extends Controller
         }
 
         return response()->json($result);
-    }
-
-    public function testEmail(Request $request, TwitchApiService $twitch): JsonResponse
-    {
-        $recipient = UserSetting::get($request->user(), 'mail_to');
-        if (! $recipient) {
-            return response()->json(['success' => false, 'message' => 'No recipient email configured.']);
-        }
-
-        $this->updateMailConfig();
-
-        try {
-            $alerts = $this->buildTestAlerts($twitch);
-            Mail::to($recipient)->send(new \App\Mail\StreamAlertMail($alerts));
-
-            return response()->json(['success' => true, 'message' => 'Test email sent.']);
-        } catch (Throwable $e) {
-            return $this->testFailure('Test email', $e, 'Sending failed. Check the SMTP settings and the application log.');
-        }
-    }
-
-    public function testDiscord(Request $request, TwitchApiService $twitch, SafeHttpClient $http): JsonResponse
-    {
-        $webhookUrl = UserSetting::get($request->user(), 'discord_webhook_url');
-        if (! $webhookUrl) {
-            return response()->json(['success' => false, 'message' => 'No Discord webhook URL configured.']);
-        }
-
-        $fake = $this->pickTestStream($twitch);
-
-        try {
-            $response = $http->post($webhookUrl, [
-                'embeds' => [[
-                    'title' => "{$fake['user_name']} is live!",
-                    'url' => "https://www.twitch.tv/{$fake['user_login']}",
-                    'description' => $fake['title'],
-                    'color' => 0x9147ff,
-                    'fields' => [
-                        ['name' => 'Category', 'value' => $fake['game'], 'inline' => true],
-                        ['name' => 'Viewers', 'value' => number_format($fake['viewers']), 'inline' => true],
-                        ['name' => 'Language', 'value' => strtoupper($fake['language']), 'inline' => true],
-                    ],
-                    'thumbnail' => $fake['avatar'] ? ['url' => $fake['avatar']] : null,
-                    'footer' => ['text' => "Alert: {$fake['rule']} (test)"],
-                    'timestamp' => now()->toIso8601String(),
-                ]],
-                'allowed_mentions' => ['parse' => []],
-            ], [], AlertService::discordPolicy());
-
-            if ($response->successful()) {
-                return response()->json(['success' => true, 'message' => 'Test message sent to Discord.']);
-            }
-
-            Log::info('Discord test returned a non-success status', ['status' => $response->status()]);
-
-            return response()->json(['success' => false, 'message' => 'Discord did not accept the message. Check the webhook URL.']);
-        } catch (Throwable $e) {
-            return $this->testFailure('Discord test', $e, 'Could not deliver to Discord. Check the webhook URL and the application log.');
-        }
-    }
-
-    public function testTelegram(Request $request, TwitchApiService $twitch, SafeHttpClient $http): JsonResponse
-    {
-        $token = UserSetting::get($request->user(), 'telegram_bot_token');
-        $chatId = UserSetting::get($request->user(), 'telegram_chat_id');
-        if (! $token || ! $chatId) {
-            return response()->json(['success' => false, 'message' => 'Telegram bot token or chat ID not configured.']);
-        }
-
-        $fake = $this->pickTestStream($twitch);
-        $viewers = number_format($fake['viewers']);
-        $url = "https://www.twitch.tv/{$fake['user_login']}";
-
-        $text = "<b>🔴 {$fake['user_name']} is live!</b>\n"
-            ."{$fake['title']}\n\n"
-            ."🎮 {$fake['game']} · 👁 {$viewers} · 🌐 ".strtoupper($fake['language'])."\n"
-            ."📋 Alert: {$fake['rule']} (test)\n\n"
-            ."<a href=\"{$url}\">Watch on Twitch →</a>";
-
-        try {
-            $response = $http->post("https://api.telegram.org/bot{$token}/sendMessage", [
-                'chat_id' => $chatId,
-                'text' => $text,
-                'parse_mode' => 'HTML',
-                'disable_web_page_preview' => false,
-            ], [], ['allowed_hosts' => ['api.telegram.org'], 'require_https' => true]);
-
-            if ($response->json('ok')) {
-                return response()->json(['success' => true, 'message' => 'Test message sent to Telegram.']);
-            }
-
-            Log::info('Telegram test rejected', ['status' => $response->status(), 'description' => Redactor::message((string) $response->json('description', ''))]);
-
-            return response()->json(['success' => false, 'message' => 'Telegram rejected the message. Check the bot token and chat ID.']);
-        } catch (Throwable $e) {
-            return $this->testFailure('Telegram test', $e, 'Could not deliver to Telegram. Check the bot token, chat ID and the application log.');
-        }
-    }
-
-    public function testWebhook(Request $request, TwitchApiService $twitch, SafeHttpClient $http): JsonResponse
-    {
-        $webhookUrl = UserSetting::get($request->user(), 'webhook_url');
-        if (! $webhookUrl) {
-            return response()->json(['success' => false, 'message' => 'No webhook URL configured.']);
-        }
-
-        $fake = $this->pickTestStream($twitch);
-
-        try {
-            if (UserSetting::get($request->user(), 'webhook_format', 'json') === 'ntfy') {
-                $body = "{$fake['title']}\n"
-                    ."{$fake['game']} · ".number_format($fake['viewers']).' viewers'."\n"
-                    .'Tags: '.implode(', ', ['English', $fake['game']])."\n"
-                    ."Alert: {$fake['rule']} (test)";
-
-                $headers = [
-                    'Title' => '=?UTF-8?B?'.base64_encode("{$fake['user_name']} is live").'?=',
-                    'Click' => "https://www.twitch.tv/{$fake['user_login']}",
-                ];
-                if ($fake['avatar']) {
-                    $headers['Icon'] = $fake['avatar'];
-                }
-
-                $response = $http->post($webhookUrl, $body, $headers, ['content_type' => 'text/plain']);
-            } else {
-                $response = $http->post($webhookUrl, [
-                    'event' => 'stream.alert',
-                    'rule' => $fake['rule'].' (test)',
-                    'channel' => $fake['user_name'],
-                    'channel_login' => $fake['user_login'],
-                    'title' => $fake['title'],
-                    'game' => $fake['game'],
-                    'viewers' => $fake['viewers'],
-                    'language' => $fake['language'],
-                    'url' => "https://www.twitch.tv/{$fake['user_login']}",
-                    'thumbnail' => null,
-                    'avatar' => $fake['avatar'],
-                    'started_at' => now()->subMinutes(rand(5, 120))->toIso8601String(),
-                    'is_mature' => false,
-                    'tags' => ['English', $fake['game']],
-                    'is_test' => true,
-                ]);
-            }
-
-            if ($response->successful()) {
-                return response()->json(['success' => true, 'message' => 'Test webhook delivered.']);
-            }
-
-            Log::info('Webhook test returned a non-success status', ['status' => $response->status()]);
-
-            return response()->json(['success' => false, 'message' => 'The webhook endpoint did not accept the request.']);
-        } catch (Throwable $e) {
-            return $this->testFailure('Webhook test', $e, 'Could not deliver the webhook. Check the URL and the application log.');
-        }
-    }
-
-    private function testFailure(string $what, Throwable $e, string $userMessage): JsonResponse
-    {
-        Log::info("{$what} failed", ['exception' => $e::class, 'error' => Redactor::message($e->getMessage())]);
-
-        return response()->json(['success' => false, 'message' => $userMessage]);
-    }
-
-    private function buildTestAlerts(TwitchApiService $twitch): array
-    {
-        $fakeStreams = collect($this->testStreamTemplates())->random(2);
-        $logins = $fakeStreams->pluck('user_login')->toArray();
-        $avatarMap = $this->fetchAvatars($twitch, $logins);
-
-        return $fakeStreams->map(function ($s) use ($avatarMap) {
-            $stream = new \App\Models\Stream([
-                'user_login' => $s['user_login'],
-                'user_name' => $s['user_name'],
-                'title' => $s['title'],
-                'viewer_count' => $s['viewers'],
-                'language' => $s['language'],
-                'game_name' => $s['game'],
-                'profile_image_url' => $avatarMap[$s['user_login']] ?? null,
-                'started_at' => now()->subMinutes(rand(5, 120)),
-            ]);
-
-            return ['rule' => new AlertRule(['name' => $s['rule']]), 'stream' => $stream];
-        })->toArray();
-    }
-
-    private function pickTestStream(TwitchApiService $twitch): array
-    {
-        $s = collect($this->testStreamTemplates())->random();
-        $avatarMap = $this->fetchAvatars($twitch, [$s['user_login']]);
-        $s['avatar'] = \App\Support\ImageUrl::safe($avatarMap[$s['user_login']] ?? null);
-
-        return $s;
-    }
-
-    private function fetchAvatars(TwitchApiService $twitch, array $logins): array
-    {
-        try {
-            $users = $twitch->getUsers($logins);
-
-            return collect($users)->mapWithKeys(fn ($u) => [
-                $u['login'] => $u['profile_image_url'] ?? null,
-            ])->toArray();
-        } catch (Throwable) {
-            return [];
-        }
-    }
-
-    private function testStreamTemplates(): array
-    {
-        return [
-            [
-                'user_login' => 'shroud', 'user_name' => 'shroud',
-                'title' => 'VALORANT Ranked Grind — Road to Radiant',
-                'game' => 'VALORANT', 'viewers' => 42_831, 'language' => 'en',
-                'rule' => 'FPS Streams',
-            ],
-            [
-                'user_login' => 'pokimane', 'user_name' => 'pokimane',
-                'title' => 'cozy morning stream — chatting & games',
-                'game' => 'Just Chatting', 'viewers' => 28_445, 'language' => 'en',
-                'rule' => 'Favorite Streamers',
-            ],
-            [
-                'user_login' => 'caedrel', 'user_name' => 'Caedrel',
-                'title' => 'LEC Watch Party — Playoffs Day 2',
-                'game' => 'League of Legends', 'viewers' => 55_210, 'language' => 'en',
-                'rule' => 'LoL Esports',
-            ],
-            [
-                'user_login' => 'jynxzi', 'user_name' => 'Jynxzi',
-                'title' => 'RAINBOW SIX SIEGE — Going for Diamond!!',
-                'game' => 'Tom Clancy\'s Rainbow Six Siege', 'viewers' => 31_672, 'language' => 'en',
-                'rule' => 'FPS Streams',
-            ],
-            [
-                'user_login' => 'ibai', 'user_name' => 'ibai',
-                'title' => 'LA VELADA DEL AÑO 4 — PREPARACION',
-                'game' => 'Just Chatting', 'viewers' => 112_300, 'language' => 'es',
-                'rule' => 'Big Spanish Streams',
-            ],
-        ];
     }
 
     public function checkUpdate(): JsonResponse

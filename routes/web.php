@@ -8,6 +8,7 @@ use App\Http\Controllers\Auth\SetupController;
 use App\Http\Controllers\BlacklistController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\HistoryController;
+use App\Http\Controllers\NotificationDestinationController;
 use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\SyncController;
 use App\Http\Controllers\TrackingController;
@@ -78,16 +79,16 @@ Route::middleware('auth')->group(function () {
     Route::get('/sync/status', [SyncController::class, 'status'])->name('sync.status');
     Route::post('/sync', [SyncController::class, 'trigger'])->middleware('throttle:sync')->name('sync.trigger');
 
-    // Settings: the account's own filters, appearance and alert destinations.
+    // Settings: the account's own filters and appearance.
     // Installation settings in the same request are accepted from administrators only.
     Route::get('/settings', [SettingsController::class, 'index'])->name('settings.index');
     Route::put('/settings', [SettingsController::class, 'update'])->name('settings.update');
-    Route::middleware('throttle:settings-tests')->group(function () {
-        Route::post('/settings/test-email', [SettingsController::class, 'testEmail'])->name('settings.test-email');
-        Route::post('/settings/test-discord', [SettingsController::class, 'testDiscord'])->name('settings.test-discord');
-        Route::post('/settings/test-telegram', [SettingsController::class, 'testTelegram'])->name('settings.test-telegram');
-        Route::post('/settings/test-webhook', [SettingsController::class, 'testWebhook'])->name('settings.test-webhook');
-    });
+
+    // Where the account's alerts go
+    Route::post('/settings/destinations', [NotificationDestinationController::class, 'store'])->name('destinations.store');
+    Route::put('/settings/destinations/{destination}', [NotificationDestinationController::class, 'update'])->name('destinations.update');
+    Route::delete('/settings/destinations/{destination}', [NotificationDestinationController::class, 'destroy'])->name('destinations.destroy');
+    Route::post('/settings/destinations/{destination}/test', [NotificationDestinationController::class, 'test'])->middleware('throttle:settings-tests')->name('destinations.test');
 
     Route::get('/account', [AccountController::class, 'show'])->name('account.show');
     Route::put('/account/password', [AccountController::class, 'updatePassword'])->name('account.password');

@@ -29,6 +29,7 @@ class AlertRuleFactory extends Factory
             'notify_discord' => false,
             'notify_telegram' => false,
             'notify_webhook' => false,
+            'notify_ntfy' => false,
             'notify_on_category_change' => false,
             'notify_on_stream_start' => true,
             'is_active' => true,
@@ -68,6 +69,11 @@ class AlertRuleFactory extends Factory
     public function withWebhook(): static
     {
         return $this->state(['notify_webhook' => true]);
+    }
+
+    public function withNtfy(): static
+    {
+        return $this->state(['notify_ntfy' => true]);
     }
 
     public function withCategoryChange(): static

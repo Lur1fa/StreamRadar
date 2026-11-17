@@ -4,11 +4,12 @@ namespace App\Http\Controllers;
 
 use App\Models\AlertRule;
 use App\Models\Category;
+use App\Models\NotificationDestination;
 use App\Models\Setting;
 use App\Models\TrackedChannel;
 use App\Models\User;
-use App\Models\UserSetting;
 use App\Services\AlertService;
+use App\Services\Notifications\DestinationType;
 use App\Services\TwitchApiService;
 use App\Services\AlertTemplateValidator;
 use Illuminate\Http\Request;
@@ -29,14 +30,19 @@ class AlertController extends Controller
 
         $categories = Category::ownedBy($user)->orderBy('name')->get(['id', 'name', 'tags']);
 
-        // Destinations are the account's own; only the SMTP server is shared.
+        // Types the account can deliver to: an enabled, complete destination
+        // (e-mail also needs the installation's mail server).
+        $readyTypes = NotificationDestination::ownedBy($user)->where('enabled', true)->get()
+            ->filter(fn (NotificationDestination $d) => $d->isComplete())
+            ->map(fn (NotificationDestination $d) => $d->type)
+            ->reject(fn (DestinationType $type) => $type === DestinationType::Email && empty(Setting::get('smtp_host')))
+            ->map(fn (DestinationType $type) => $type->value)
+            ->unique()->values();
+
         return Inertia::render('Alerts', [
             'alertRules' => $alertRules,
             'categories' => $categories,
-            'emailConfigured' => UserSetting::has($user, 'mail_to') && ! empty(Setting::get('smtp_host')),
-            'discordConfigured' => UserSetting::has($user, 'discord_webhook_url'),
-            'telegramConfigured' => UserSetting::has($user, 'telegram_bot_token') && UserSetting::has($user, 'telegram_chat_id'),
-            'webhookConfigured' => UserSetting::has($user, 'webhook_url'),
+            'readyTypes' => $readyTypes,
         ]);
     }
 
@@ -87,6 +93,7 @@ class AlertController extends Controller
             'notify_discord' => 'boolean',
             'notify_telegram' => 'boolean',
             'notify_webhook' => 'boolean',
+            'notify_ntfy' => 'boolean',
             'notify_on_category_change' => 'boolean',
             'notify_on_stream_start' => 'boolean',
             'notification_template' => 'nullable|array',
@@ -125,6 +132,7 @@ class AlertController extends Controller
             'notify_discord' => 'sometimes|boolean',
             'notify_telegram' => 'sometimes|boolean',
             'notify_webhook' => 'sometimes|boolean',
+            'notify_ntfy' => 'sometimes|boolean',
             'notify_on_category_change' => 'sometimes|boolean',
             'notification_template' => 'sometimes|nullable|array',
         ]);

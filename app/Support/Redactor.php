@@ -2,6 +2,7 @@
 
 namespace App\Support;
 
+use App\Models\NotificationDestination;
 use App\Models\Setting;
 use App\Models\UserSetting;
 use Throwable;
@@ -116,8 +117,8 @@ final class Redactor
                 }
             }
 
-            // Destinations every account stores for its own alerts.
-            foreach (UserSetting::secretValues() as $v) {
+            // Credentials every account stores for its own alerts.
+            foreach ([...UserSetting::secretValues(), ...NotificationDestination::secretValues()] as $v) {
                 if (strlen($v) >= 6) {
                     $values[] = $v;
                 }

@@ -25,13 +25,13 @@ class Setting extends Model
 
     protected $fillable = ['key', 'value'];
 
-    /** Settings that hold credentials or bearer-style URLs. */
+    /**
+     * Settings that hold credentials. Credentials of alert destinations live
+     * with the destination (NotificationDestination).
+     */
     public const SECRET_KEYS = [
         'twitch_client_secret',
         'smtp_password',
-        'telegram_bot_token',
-        'discord_webhook_url',
-        'webhook_url',
     ];
 
     /** Keys the application manages itself; never exported or imported. */
@@ -58,7 +58,8 @@ class Setting extends Model
 
     /**
      * Settings every account has for itself (stored in UserSetting): default
-     * filters, appearance, and where that account's alerts are delivered.
+     * filters and appearance. Where its alerts go is a list of
+     * NotificationDestination records.
      */
     public const ACCOUNT_KEYS = [
         'global_min_viewers',
@@ -66,16 +67,6 @@ class Setting extends Model
         'global_languages',
         'global_keywords',
         'theme',
-        'mail_to',
-        'discord_webhook_url',
-        'telegram_bot_token',
-        'telegram_chat_id',
-        'webhook_url',
-        'webhook_format',
-        'notifications_email_enabled',
-        'notifications_discord_enabled',
-        'notifications_telegram_enabled',
-        'notifications_webhook_enabled',
     ];
 
     /** Everything the Settings page can read or write. */
@@ -89,7 +80,6 @@ class Setting extends Model
         'global_languages' => '[]',
         'global_keywords' => '[]',
         'theme' => 'system',
-        'webhook_format' => 'json',
     ];
 
     public static function isAccountKey(string $key): bool

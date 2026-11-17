@@ -1,7 +1,5 @@
 <?php
 
-use App\Models\User;
-use App\Services\AccountDataService;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -11,8 +9,8 @@ use Illuminate\Support\Facades\Schema;
  * whole installation. Each of them now belongs to one account, and so do the
  * settings that say where that account's alerts are delivered.
  *
- * Existing data goes to the oldest administrator. Other accounts start
- * empty; `php artisan user:move-data` moves it to a different account. When
+ * Existing data goes to the oldest administrator (in the next migration,
+ * 2026_11_17_000002). Other accounts start empty; `php artisan user:move-data` moves it to a different account. When
  * no account exists yet, the data stays without an owner until the first
  * administrator is created (see User::booted()).
  */
@@ -29,7 +27,8 @@ return new class extends Migration
             $table->unique(['user_id', 'key']);
         });
 
-        foreach (AccountDataService::TABLES as $name) {
+        // A fixed list: AccountDataService::TABLES grows with later migrations.
+        foreach (['categories', 'tag_filters', 'tracked_channels', 'blacklist_rules', 'alert_rules', 'streams', 'history_events'] as $name) {
             Schema::table($name, function (Blueprint $table) {
                 $table->foreignId('owner_id')->nullable()->constrained('users')->cascadeOnDelete();
             });
@@ -64,11 +63,8 @@ return new class extends Migration
             $table->index(['owner_id', 'created_at']);
         });
 
-        $admin = User::query()->where('role', User::ROLE_ADMIN)->orderBy('created_at')->orderBy('id')->first();
-
-        if ($admin) {
-            app(AccountDataService::class)->adoptOrphans($admin);
-        }
+        // Handing existing data to the oldest administrator happens in
+        // 2026_11_17_000002, once every table AccountDataService works on exists.
     }
 
     public function down(): void

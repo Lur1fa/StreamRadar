@@ -20,6 +20,8 @@ class SafeHttpClient
 {
     public function __construct(private OutboundUrlGuard $guard) {}
 
+    public const METHODS = ['POST', 'PUT', 'PATCH'];
+
     /**
      * @param  array{allowed_hosts?: string[], require_https?: bool, path_prefix?: ?string, content_type?: string}  $policy
      *
@@ -27,11 +29,37 @@ class SafeHttpClient
      */
     public function post(string $url, array|string|null $body = null, array $headers = [], array $policy = []): Response
     {
+        return $this->send('POST', $url, $body, $headers, $policy);
+    }
+
+    /**
+     * Send a request with a body. A string body is sent as is with
+     * `content_type`; an array as JSON.
+     *
+     * Options, besides the policy of post(): `query` (name => value, added
+     * to the URL before it is vetted), `basic_auth` ([user, password]) and
+     * `bearer_token`.
+     *
+     * @param  array{allowed_hosts?: string[], require_https?: bool, path_prefix?: ?string, content_type?: string, query?: array<string, string>, basic_auth?: array{0: string, 1: string}, bearer_token?: string}  $options
+     *
+     * @throws UnsafeUrlException
+     */
+    public function send(string $method, string $url, array|string|null $body = null, array $headers = [], array $options = []): Response
+    {
+        $method = strtoupper($method);
+        if (! in_array($method, self::METHODS, true)) {
+            throw new UnsafeUrlException('The request method is not allowed.');
+        }
+
+        if (! empty($options['query'])) {
+            $url .= (str_contains($url, '?') ? '&' : '?').http_build_query($options['query'], '', '&', PHP_QUERY_RFC3986);
+        }
+
         $validated = $this->guard->validate(
             $url,
-            $policy['allowed_hosts'] ?? [],
-            $policy['require_https'] ?? false,
-            $policy['path_prefix'] ?? null,
+            $options['allowed_hosts'] ?? [],
+            $options['require_https'] ?? false,
+            $options['path_prefix'] ?? null,
         );
 
         $request = $this->pendingRequest($validated);
@@ -40,11 +68,17 @@ class SafeHttpClient
             $request = $request->withHeaders($headers);
         }
 
-        if (is_string($body)) {
-            return $request->withBody($body, $policy['content_type'] ?? 'text/plain')->post($validated->url);
+        if (isset($options['basic_auth'])) {
+            $request = $request->withBasicAuth($options['basic_auth'][0], $options['basic_auth'][1]);
+        } elseif (isset($options['bearer_token'])) {
+            $request = $request->withToken($options['bearer_token']);
         }
 
-        return $request->post($validated->url, $body ?? []);
+        if (is_string($body)) {
+            return $request->withBody($body, $options['content_type'] ?? 'text/plain')->send($method, $validated->url);
+        }
+
+        return $request->asJson()->send($method, $validated->url, ['json' => $body ?? []]);
     }
 
     public function pendingRequest(ValidatedUrl $validated): PendingRequest

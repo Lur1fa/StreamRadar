@@ -4,7 +4,6 @@ namespace App\Http\Requests;
 
 use App\Models\Setting;
 use App\Models\User;
-use App\Rules\SafeWebhookUrl;
 use Illuminate\Foundation\Http\FormRequest;
 
 /**
@@ -55,7 +54,6 @@ class UpdateSettingsRequest extends FormRequest
             'global_languages' => ['nullable', 'json', 'max:2000'],
             'global_keywords' => ['nullable', 'json', 'max:5000'],
             'theme' => ['nullable', 'in:light,dark,system'],
-            'mail_to' => ['nullable', 'email:rfc', 'max:255'],
             'smtp_host' => ['nullable', 'string', 'max:255', 'regex:/^[A-Za-z0-9.\-]+$/'],
             'smtp_port' => ['nullable', 'integer', 'between:1,65535'],
             'smtp_username' => ['nullable', 'string', 'max:255'],
@@ -63,24 +61,11 @@ class UpdateSettingsRequest extends FormRequest
             'smtp_encryption' => ['nullable', 'in:tls,ssl,starttls'],
             'mail_from_address' => ['nullable', 'email:rfc', 'max:255'],
             'mail_from_name' => ['nullable', 'string', 'max:255'],
-            'discord_webhook_url' => ['nullable', 'string', 'max:2048', SafeWebhookUrl::discord()],
-            'telegram_bot_token' => ['nullable', 'string', 'max:255', 'regex:/^\d{3,}:[A-Za-z0-9_\-]{10,}$/'],
-            'telegram_chat_id' => ['nullable', 'string', 'max:64', 'regex:/^-?\d+$/'],
-            'webhook_url' => ['nullable', 'string', 'max:2048', new SafeWebhookUrl],
-            'webhook_format' => ['nullable', 'in:json,ntfy'],
-            'notifications_email_enabled' => ['nullable', 'boolean'],
-            'notifications_discord_enabled' => ['nullable', 'boolean'],
-            'notifications_telegram_enabled' => ['nullable', 'boolean'],
-            'notifications_webhook_enabled' => ['nullable', 'boolean'],
         ];
     }
 
     public const BOOLEAN_KEYS = [
         'auto_sync_enabled',
-        'notifications_email_enabled',
-        'notifications_discord_enabled',
-        'notifications_telegram_enabled',
-        'notifications_webhook_enabled',
     ];
 
     /**

@@ -14,7 +14,8 @@ use RuntimeException;
  *  - DNS pinned to the vetted addresses (CURLOPT_RESOLVE) → no rebinding.
  *  - Redirects are never followed.
  *  - Only http/https protocols, short connect/read timeouts.
- *  - Response size capped (Content-Length check + transfer abort).
+ *  - Response size capped (Content-Length check + transfer abort via the
+ *    progress callback).
  */
 class SafeHttpClient
 {
@@ -85,26 +86,17 @@ class SafeHttpClient
     {
         $max = max(1024, (int) config('security.webhook.max_response_bytes', 1048576));
 
-        $curl = [
-            CURLOPT_RESOLVE => self::resolveEntries($validated),
-            CURLOPT_NOPROGRESS => false,
-            CURLOPT_PROGRESSFUNCTION => static fn ($ch, $dlTotal, $dlNow) => $dlNow > $max ? 1 : 0,
-        ];
-        if (defined('CURLOPT_PROTOCOLS') && defined('CURLPROTO_HTTP') && defined('CURLPROTO_HTTPS')) {
-            $curl[CURLOPT_PROTOCOLS] = CURLPROTO_HTTP | CURLPROTO_HTTPS;
-        }
-        if (defined('CURLOPT_MAXFILESIZE_LARGE')) {
-            $curl[CURLOPT_MAXFILESIZE_LARGE] = $max;
-        } elseif (defined('CURLOPT_MAXFILESIZE')) {
-            $curl[CURLOPT_MAXFILESIZE] = $max;
-        }
-
+        // Guzzle 8 only accepts raw cURL options from its allow-list; protocols
+        // and progress have request options of their own.
         return Http::withoutRedirecting()
             ->connectTimeout((int) config('security.webhook.connect_timeout', 5))
             ->timeout((int) config('security.webhook.timeout', 10))
             ->withUserAgent('StreamRadar/1.0 (+https://github.com/stmn/StreamRadar)')
             ->withOptions([
-                'curl' => $curl,
+                'curl' => [CURLOPT_RESOLVE => self::resolveEntries($validated)],
+                'protocols' => ['http', 'https'],
+                // Returning true aborts the transfer: caps bodies without a Content-Length.
+                'progress' => static fn ($downloadTotal, $downloaded) => $downloaded > $max,
                 'on_headers' => static function ($response) use ($max): void {
                     $length = $response->getHeaderLine('Content-Length');
                     if ($length !== '' && (int) $length > $max) {

@@ -189,11 +189,11 @@ test('testing an e-mail destination sends one mail', function () {
 });
 
 test('a failed test says why without revealing the URL or token', function () {
-    Http::fake(['*' => Http::response('denied', 403)]);
+    Http::fake(['*' => Http::response(['code' => 40301, 'http' => 403, 'error' => 'forbidden'], 403)]);
     $destination = destination('ntfy', ['server_url' => 'https://ntfy.example.com', 'topic' => 'secret-topic'], ['access_token' => 'tk_hidden_value']);
 
     $response = $this->postJson("/settings/destinations/{$destination->id}/test")->assertOk()
-        ->assertJson(['success' => false, 'message' => 'ntfy answered with HTTP 403. Check the access token, or the user name and password.']);
+        ->assertJson(['success' => false, 'message' => 'ntfy answered with HTTP 403 (forbidden). Check the access token, or the user name and password.']);
 
     expect($response->getContent())->not->toContain('tk_hidden_value')->not->toContain('secret-topic');
 });
@@ -224,4 +224,27 @@ test('a destination can be deleted', function () {
     $this->delete("/settings/destinations/{$destination->id}")->assertRedirect()->assertSessionHas('success');
 
     expect(NotificationDestination::count())->toBe(0);
+});
+
+test('a failed test passes on the server\'s reason but never an HTML page', function () {
+    $destination = destination('telegram', ['chat_id' => '42'], ['bot_token' => '123456:ABCDEFghijklmnopqrstuvwxyz']);
+
+    Http::fake(['*' => Http::sequence()
+        ->push(['ok' => false, 'error_code' => 400, 'description' => 'Bad Request: chat not found'], 400)
+        ->push('<html><body>502 Bad Gateway</body></html>', 502)]);
+
+    $this->postJson("/settings/destinations/{$destination->id}/test")
+        ->assertJson(['message' => 'Telegram answered with HTTP 400 (Bad Request: chat not found). Check the bot token and chat ID.']);
+    $this->postJson("/settings/destinations/{$destination->id}/test")
+        ->assertJson(['message' => 'Telegram answered with HTTP 502. Check the bot token and chat ID.']);
+});
+
+test('an unexpected error is named in the test result instead of a bare "failed"', function () {
+    Http::fake(fn () => throw new RuntimeException('Something specific broke for https://ntfy.example.com/secret-topic'));
+    $destination = destination('ntfy', ['server_url' => 'https://ntfy.example.com', 'topic' => 'secret-topic']);
+
+    $message = $this->postJson("/settings/destinations/{$destination->id}/test")->json('message');
+
+    expect($message)->toStartWith('Sending failed: RuntimeException: Something specific broke')
+        ->not->toContain('secret-topic');
 });

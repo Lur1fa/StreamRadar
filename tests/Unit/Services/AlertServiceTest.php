@@ -499,6 +499,6 @@ test('deliver tries every message and then reports the refusal', function () {
     ];
 
     expect(fn () => app(AlertService::class)->deliver($destination, $alerts))
-        ->toThrow(DeliveryFailed::class, 'ntfy answered with HTTP 403.');
+        ->toThrow(DeliveryFailed::class, 'ntfy answered with HTTP 403 (forbidden).');
     Http::assertSentCount(2);
 });

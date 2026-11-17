@@ -16,6 +16,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Throwable;
 
 /**
@@ -62,10 +63,12 @@ class NotificationDestinationController extends Controller
 
             return response()->json(['success' => true, 'message' => 'Test sent.']);
         } catch (Throwable $e) {
-            Log::info('Destination test failed', [
+            Log::warning('Destination test failed', [
                 'destination' => $destination->id,
+                'type' => $destination->type->value,
                 'exception' => $e::class,
                 'error' => Redactor::message($e->getMessage()),
+                'at' => $e->getFile().':'.$e->getLine(),
             ]);
 
             return response()->json(['success' => false, 'message' => $this->failureMessage($request, $destination, $e)]);
@@ -77,12 +80,13 @@ class NotificationDestinationController extends Controller
         $status = $e instanceof DeliveryFailed ? $e->status : null;
         $refused = in_array($status, [401, 403], true);
 
-        // These never contain the URL or credentials.
+        // The account sees why: its own server's answer, or the error with
+        // every URL cut down to its host and every known secret removed.
         $reason = match (true) {
-            $e instanceof DeliveryFailed => $e->getMessage(),
+            $e instanceof DeliveryFailed => Redactor::message($e->getMessage()),
             $e instanceof UnsafeUrlException => 'The address is not allowed: '.$e->getMessage().($e->allowable ? ' '.SafeWebhookUrl::localNetworkHint() : ''),
-            $e instanceof ConnectionException => 'Could not connect.',
-            default => 'Sending failed.',
+            $e instanceof ConnectionException => 'Could not connect: '.self::cleanError($e->getMessage()),
+            default => 'Sending failed: '.class_basename($e).': '.self::cleanError($e->getMessage()),
         };
 
         $check = match ($destination->type) {
@@ -96,5 +100,19 @@ class NotificationDestinationController extends Controller
         };
 
         return $e instanceof UnsafeUrlException ? $reason : "{$reason} {$check}";
+    }
+
+    /**
+     * "cURL error 60: SSL certificate problem: … (see https://curl.se/…) for
+     * https://ntfy.example.com/topic" becomes "cURL error 60: SSL certificate
+     * problem: …".
+     */
+    private static function cleanError(string $message): string
+    {
+        $message = (string) preg_replace('/\s*\(see https?:\/\/[^)]*\)/i', '', $message);
+        $message = (string) preg_replace('/\s+for https?:\/\/\S+\s*$/i', '', $message);
+        $message = rtrim(Redactor::message($message), '. ');
+
+        return Str::limit($message, 240, '…').'.';
     }
 }

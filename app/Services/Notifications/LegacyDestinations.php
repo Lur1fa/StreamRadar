@@ -53,6 +53,30 @@ final class LegacyDestinations
     }
 
     /**
+     * Turn the old destination settings of every account into destinations
+     * and delete those settings.
+     *
+     * @return int destinations created
+     */
+    public static function convertAccountSettings(): int
+    {
+        $created = 0;
+
+        $rows = DB::table('user_settings')->whereIn('key', self::KEYS)->get()->groupBy('user_id');
+        foreach ($rows as $userId => $settings) {
+            $values = [];
+            foreach ($settings as $row) {
+                $values[$row->key] = self::decode($row->key, $row->value);
+            }
+            $created += self::import((int) $userId, $values);
+        }
+
+        DB::table('user_settings')->whereIn('key', self::KEYS)->delete();
+
+        return $created;
+    }
+
+    /**
      * Create the destinations the old settings of one account describe.
      *
      * @param  array<string, mixed>  $values  plain (decrypted) values by key

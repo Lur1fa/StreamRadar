@@ -3,7 +3,6 @@
 use App\Models\AlertRule;
 use App\Models\BlacklistRule;
 use App\Models\Category;
-use App\Models\HistoryEvent;
 use App\Models\Stream;
 use App\Models\StreamAlertTracking;
 use App\Models\TagFilter;
@@ -318,7 +317,7 @@ test('E2E: full pipeline — sync triggers alert and sends Discord notification'
     $twitch = $this->mock(TwitchApiService::class);
     $this->mock(TwitchTrackerService::class);
 
-    setAccountSetting('discord_webhook_url', 'https://discord.com/api/webhooks/test');
+    destination('discord', [], ['webhook_url' => 'https://discord.com/api/webhooks/test']);
 
     $category = Category::factory()->create();
     AlertRule::factory()->withDiscord()->create(['min_viewers' => 100]);
@@ -347,7 +346,7 @@ test('E2E: full pipeline — sync triggers alert and sends Email notification', 
     $twitch = $this->mock(TwitchApiService::class);
     $this->mock(TwitchTrackerService::class);
 
-    setAccountSetting('mail_to', 'test@example.com');
+    destination('email', ['to' => 'test@example.com']);
 
     $category = Category::factory()->create();
     AlertRule::factory()->withEmail()->create();
@@ -368,7 +367,7 @@ test('E2E: alert with category_tags only triggers for matching tagged category',
     $twitch = $this->mock(TwitchApiService::class);
     $this->mock(TwitchTrackerService::class);
 
-    setAccountSetting('discord_webhook_url', 'https://discord.com/api/webhooks/test');
+    destination('discord', [], ['webhook_url' => 'https://discord.com/api/webhooks/test']);
 
     $retro = Category::factory()->create(['tags' => ['retro']]);
     $fps = Category::factory()->create(['tags' => ['fps']]);
@@ -419,7 +418,7 @@ test('E2E: alert with notify_on_category_change triggers when game changes', fun
     $twitch = $this->mock(TwitchApiService::class);
     $this->mock(TwitchTrackerService::class);
 
-    setAccountSetting('discord_webhook_url', 'https://discord.com/api/webhooks/test');
+    destination('discord', [], ['webhook_url' => 'https://discord.com/api/webhooks/test']);
 
     $category = Category::factory()->create();
     AlertRule::factory()->withDiscord()->create(['notify_on_category_change' => true]);
@@ -605,8 +604,8 @@ test('E2E: full scenario — multiple categories, filters, blacklist, alerts, no
 
     // Setup
     setAccountSetting('global_min_viewers', '50');
-    setAccountSetting('discord_webhook_url', 'https://discord.com/api/webhooks/test');
-    setAccountSetting('mail_to', 'admin@test.com');
+    destination('discord', [], ['webhook_url' => 'https://discord.com/api/webhooks/test']);
+    destination('email', ['to' => 'admin@test.com']);
 
     TagFilter::createFor(testOwner(), ['tag' => 'retro', 'min_viewers' => 5]);
 

@@ -2,6 +2,7 @@
 
 use App\Models\Setting;
 use App\Models\User;
+use Illuminate\Support\Facades\DB;
 
 beforeEach(function () {
     $this->actingAs(User::factory()->admin()->create());
@@ -9,7 +10,7 @@ beforeEach(function () {
     Setting::set('twitch_client_secret', 'tw-secret-abcdef123456');
     Setting::set('smtp_password', 'smtp-pass-abcdef123456');
     setAccountSetting('telegram_bot_token', '123456:ABCDEFghijklmnopqrstuvwxyz0123456789');
-    setAccountSetting('discord_webhook_url', 'https://discord.com/api/webhooks/42/zzSECRETtoken123');
+    destination('discord', [], ['webhook_url' => 'https://discord.com/api/webhooks/42/zzSECRETtoken123']);
     setAccountSetting('webhook_url', 'https://ntfy.example.com/secret-topic-xyz');
 });
 
@@ -59,7 +60,7 @@ test('no managed secret key is ever marked exportable', function () {
 });
 
 test('secret values are encrypted in the database', function () use ($secretValues) {
-    $rows = \Illuminate\Support\Facades\DB::table('settings')->whereIn('key', Setting::SECRET_KEYS)->pluck('value');
+    $rows = DB::table('settings')->whereIn('key', Setting::SECRET_KEYS)->pluck('value');
 
     foreach ($rows as $stored) {
         foreach ($secretValues as $secret) {

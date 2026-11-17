@@ -13,10 +13,9 @@ use Illuminate\Support\Facades\Mail;
 
 test('an invalid stored template falls back to the default format instead of crashing', function () {
     Http::fake();
-    setAccountSetting('webhook_url', 'https://ntfy.example.com/topic');
-    setAccountSetting('webhook_format', 'ntfy');
+    destination('ntfy', ['server_url' => 'https://ntfy.example.com', 'topic' => 'topic']);
 
-    $rule = AlertRule::factory()->withWebhook()->create([
+    $rule = AlertRule::factory()->withNtfy()->create([
         'notification_template' => ['version' => 2, 'blocks' => 'broken'],
     ]);
     $stream = Stream::factory()->create();
@@ -30,10 +29,10 @@ test('one failing provider does not stop the others', function () {
     Http::fake();
     Mail::fake();
 
-    // A webhook pointed at a private address will fail SSRF validation, but
-    // e-mail must still go out.
-    setAccountSetting('webhook_url', 'http://127.0.0.1/hook');
-    setAccountSetting('mail_to', 'me@example.com');
+    // A webhook pointed at a private address (stored before the rules were
+    // this strict, say) fails SSRF validation, but e-mail must still go out.
+    destination('webhook', ['method' => 'POST', 'auth' => 'none'], ['url' => 'http://127.0.0.1/hook']);
+    destination('email', ['to' => 'me@example.com']);
     Setting::set('smtp_host', 'smtp.example.com');
 
     $rule = AlertRule::factory()->withWebhook()->withEmail()->create();

@@ -6,7 +6,6 @@ use App\Services\Notifications\LegacyDestinations;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -39,15 +38,7 @@ return new class extends Migration
             $table->boolean('notify_ntfy')->default(false)->after('notify_webhook');
         });
 
-        $rows = DB::table('user_settings')->whereIn('key', LegacyDestinations::KEYS)->get()->groupBy('user_id');
-        foreach ($rows as $userId => $settings) {
-            $values = [];
-            foreach ($settings as $row) {
-                $values[$row->key] = LegacyDestinations::decode($row->key, $row->value);
-            }
-            LegacyDestinations::import((int) $userId, $values);
-        }
-        DB::table('user_settings')->whereIn('key', LegacyDestinations::KEYS)->delete();
+        LegacyDestinations::convertAccountSettings();
 
         // Data and settings from the time everything was shared, not yet given
         // to an account (including what 2026_11_17_000001 left): the oldest

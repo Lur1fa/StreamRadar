@@ -15,9 +15,9 @@ use App\Models\User;
 use App\Rules\SafeWebhookUrl;
 use App\Services\Notifications\DestinationType;
 use App\Services\Notifications\LegacyDestinations;
-use Illuminate\Validation\Rule;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 /**

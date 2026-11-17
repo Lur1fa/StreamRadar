@@ -2,7 +2,7 @@
   <img src="public/images/logo.png" alt="StreamRadar" width="500">
 </p>
 
-<p align="center">A self-hosted dashboard for monitoring Twitch streams. Track categories and channels, filter by language and viewers, get alerts via email, Discord or webhooks.</p>
+<p align="center">A self-hosted dashboard for monitoring Twitch streams. Track categories and channels, filter by language and viewers, get alerts via ntfy, email, Discord, Telegram or webhooks.</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
@@ -12,14 +12,14 @@
 
 Twitch lets you follow categories, but it won't notify you when a new stream goes live in one. **There's no way to say "tell me when someone starts streaming this game in English with more than 50 viewers."** You're left refreshing the category page manually and scrolling through hundreds of streams.
 
-StreamRadar watches the categories and channels you pick, checks for new streams automatically, and alerts you via email, Discord, or any webhook when something matches your conditions — language, viewer count, keywords, you name it. Self-hosted, private, no account needed.
+StreamRadar watches the categories and channels you pick, checks for new streams automatically, and alerts you via ntfy, email, Discord, Telegram or any webhook when something matches your conditions — language, viewer count, keywords, you name it. Self-hosted, private, no account needed.
 
 ## What it does
 
 - **Track categories** — follow Twitch game categories (e.g. "Just Chatting", "Fortnite")
 - **Track channels** — follow specific Twitch channels regardless of what they stream
 - **Live dashboard** — see all live streams in one place with sorting, grouping, and filtering
-- **Alerts** — get notified when streams go live via email, Discord, Telegram, or generic webhook
+- **Alerts** — get notified when streams go live via ntfy, email, Discord, Telegram, or generic webhook
 - **Blacklist** — block channels, keywords, or tags from appearing in results
 - **Dark / Light mode** — system-aware theme with manual toggle
 - **Pin streams** — pin your favorites to the top
@@ -168,22 +168,25 @@ StreamRadar needs a Twitch API key to fetch stream data. Don't worry — it only
 1. Go to the **Alerts** tab
 2. Click **New Alert**
 3. Configure what you want to be notified about
-4. Choose notification channels: Email, Discord, Telegram, and/or Webhook
+4. Choose where it goes: Discord, Email, Telegram, ntfy and/or Webhook
 
-Configure each channel in **Settings** first (SMTP for Email, webhook URL for Discord, bot token for Telegram, endpoint URL for Webhook).
+Add the destinations under **Settings → Notifications** first. A rule sends to every enabled destination of each type it has switched on.
 
 ---
 
 ## Notifications
 
-StreamRadar can send alerts through multiple channels:
+Each account keeps a list of destinations under **Settings → Notifications**: click **Add Destination**, pick the type, and fill in its fields. You can have several of the same type (two ntfy topics, say), switch each on or off, and send a test alert from the list.
 
-| Method | Setup |
-|--------|-------|
-| **Email** | Settings → Email/SMTP. Works with any SMTP server, Gmail, Mailgun, etc. |
-| **Discord** | Settings → Discord. Paste a [webhook URL](https://support.discord.com/hc/en-us/articles/228383668) from your server. |
-| **Telegram** | Settings → Telegram. Create a bot via [@BotFather](https://t.me/BotFather), copy the bot token, send `/start` to the bot, then enter the bot token and your chat ID. To find your chat ID, message [@userinfobot](https://t.me/userinfobot). |
-| **Webhook** | Settings → Webhook. POST JSON to any URL — works with [ntfy.sh](https://ntfy.sh), Zapier, Make, or your own endpoint. |
+| Type | Fields |
+|------|--------|
+| **ntfy** | Server URL and topic. For a protected topic, an access token (sent as `Authorization: Bearer`) or a username and password (Basic). Optional title prefix. |
+| **Webhook** | Method (POST, PUT, PATCH), URL, query parameters, headers, and authentication (none, Basic or Bearer token). Each batch of alerts is sent as JSON (`{"event": "stream.alerts.batch", "count": …, "alerts": […]}`). Works with Zapier, Make or your own endpoint. |
+| **Email** | One or more recipient addresses and an optional subject prefix. Sent through the mail server an admin sets up under **Settings → Mail Server**. |
+| **Telegram** | Bot token from [@BotFather](https://t.me/BotFather) and your chat ID (send `/start` to the bot; [@userinfobot](https://t.me/userinfobot) tells you the ID). |
+| **Discord** | A [webhook URL](https://support.discord.com/hc/en-us/articles/228383668) from your server. |
+
+Credentials never go in a URL: use the access token or username/password fields (ntfy) or **Authentication** (webhook). Upgrading turns the old Email, Discord, Telegram and Webhook settings into destinations; a webhook that used the ntfy format becomes an ntfy destination, and the alert rules that sent to it send to ntfy.
 
 ---
 
@@ -208,7 +211,7 @@ Authentication is always required — there is no open mode and no default passw
 
 **Accounts and roles.** Each person has their own account with one of two roles:
 
-- **user** — their own streams, tracking, alerts, blacklist and history, their own default filters, and their own alert destinations (e-mail address, Discord webhook, Telegram, webhook).
+- **user** — their own streams, tracking, alerts, blacklist and history, their own default filters, and their own alert destinations (ntfy, webhook, e-mail, Telegram, Discord).
 - **admin** — the same for their own account, plus the installation: Twitch API keys, scanning, SMTP server, backup, and user management.
 
 **Each account has its own data.** Tracked categories and channels, alerts, blacklist, history and the stream list belong to the account that created them; no account sees or changes another account's. Alerts are delivered to the destinations of the account that owns the alert. Twitch is still asked only once per category on each scan, however many accounts track it. Deleting an account deletes its data.
@@ -247,9 +250,9 @@ The redirect URI is `https://your-host/auth/oidc/callback`. SSO is additive: loc
 
 **Lockout protection.** Failed logins are rate-limited per account (progressive lockout) and per IP. Passwords are bcrypt-hashed with a configurable minimum length (`AUTH_PASSWORD_MIN_LENGTH`, default 12).
 
-**Secrets.** API secrets, SMTP passwords, bot tokens and webhook URLs are encrypted at rest, never sent to the browser (only a mask is shown), and never included in exports.
+**Secrets.** API secrets, SMTP passwords and every destination's credentials (tokens, passwords, webhook URLs, header and query values) are encrypted at rest, never sent to the browser (only a mask is shown), and never included in exports.
 
-**Outbound webhooks.** Webhook and Discord URLs are validated against SSRF: they must resolve to public addresses, with no redirects and a response-size cap. To target a self-hosted endpoint on your LAN (e.g. ntfy), allow its exact hostname via `WEBHOOK_ALLOWED_HOSTS=ntfy.home.lan`.
+**Outbound webhooks.** ntfy, webhook and Discord URLs are validated against SSRF: they must resolve to public addresses, with no redirects and a response-size cap. To target a self-hosted endpoint on your LAN (e.g. ntfy), allow its exact hostname via `WEBHOOK_ALLOWED_HOSTS=ntfy.home.lan`.
 
 **Production hardening.** Keep `APP_ENV=production` and `APP_DEBUG=false` (the app forces both off if misconfigured). Developer tooling (Inertia DevTools) is disabled unless explicitly enabled and is never active in production; its endpoints additionally require an admin session.
 

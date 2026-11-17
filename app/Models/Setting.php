@@ -230,6 +230,7 @@ class Setting extends Model
             if (self::isSecret($key)) {
                 $view[$key.'_set'] = static::has($key);
                 $view[$key.'_masked'] = static::mask($key);
+
                 continue;
             }
             $view[$key] = static::get($key, $defaults[$key] ?? null);

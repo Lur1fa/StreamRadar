@@ -9,9 +9,10 @@ use App\Models\Setting;
 use App\Models\TrackedChannel;
 use App\Models\User;
 use App\Services\AlertService;
+use App\Services\AlertTemplateValidator;
 use App\Services\Notifications\DestinationType;
 use App\Services\TwitchApiService;
-use App\Services\AlertTemplateValidator;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Inertia\Inertia;
@@ -78,7 +79,7 @@ class AlertController extends Controller
         return $validated;
     }
 
-    public function store(Request $request, AlertService $alertService, TwitchApiService $twitch): \Illuminate\Http\RedirectResponse
+    public function store(Request $request, AlertService $alertService, TwitchApiService $twitch): RedirectResponse
     {
         $validated = $request->validate([
             'name' => 'required|string|max:255',
@@ -116,7 +117,7 @@ class AlertController extends Controller
         return back()->with('success', 'Alert rule created.');
     }
 
-    public function update(Request $request, AlertRule $alert): \Illuminate\Http\RedirectResponse
+    public function update(Request $request, AlertRule $alert): RedirectResponse
     {
         $validated = $request->validate([
             'name' => 'sometimes|string|max:255',
@@ -186,7 +187,7 @@ class AlertController extends Controller
         ]);
     }
 
-    public function destroy(AlertRule $alert): \Illuminate\Http\RedirectResponse
+    public function destroy(AlertRule $alert): RedirectResponse
     {
         $alert->trackings()->delete();
         $alert->delete();

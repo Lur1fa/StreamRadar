@@ -65,6 +65,7 @@ export interface AlertRule {
     notify_discord: boolean;
     notify_telegram: boolean;
     notify_webhook: boolean;
+    notify_ntfy: boolean;
     notify_on_category_change: boolean;
     notify_on_stream_start: boolean;
     notification_template: AlertNotificationTemplate | null;
@@ -193,4 +194,19 @@ export type StreamFilters = {
     category: number | null;
     search: string | null;
     density: string;
+}
+
+export type DestinationType = 'ntfy' | 'webhook' | 'email' | 'telegram' | 'discord';
+
+/** An alert destination as the server sends it: secrets only as "is set" flags and masks. */
+export interface NotificationDestination {
+    id: number;
+    name: string;
+    type: DestinationType;
+    enabled: boolean;
+    config: Record<string, any>;
+    secrets_set: Record<string, boolean>;
+    secret_masks: Record<string, string>;
+    missing: string[];
+    updated_at: string | null;
 }

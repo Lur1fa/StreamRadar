@@ -5,9 +5,21 @@ import { Plus, Bell, Trash2, CheckCircle, XCircle, X, AlertTriangle, Pencil, Che
 import AppLayout from '@/layouts/AppLayout.vue';
 import ConfirmModal from '@/components/ConfirmModal.vue';
 import AlertTemplateBuilder from '@/components/AlertTemplateBuilder.vue';
-import type { AlertRule, Category, AlertNotificationTemplate } from '@/types';
+import type { AlertRule, Category, AlertNotificationTemplate, DestinationType } from '@/types';
 
-const props = defineProps<{ alertRules: AlertRule[]; categories: Category[]; emailConfigured: boolean; discordConfigured: boolean; telegramConfigured: boolean; webhookConfigured: boolean }>();
+const props = defineProps<{ alertRules: AlertRule[]; categories: Category[]; readyTypes: DestinationType[] }>();
+
+// The destination types a rule can send to. A rule goes to every enabled
+// destination of each type it has switched on (Settings → Notifications).
+type NotifyKey = 'notify_discord' | 'notify_email' | 'notify_telegram' | 'notify_webhook' | 'notify_ntfy';
+const CHANNELS: { type: DestinationType; key: NotifyKey; label: string; on: string; text: string }[] = [
+    { type: 'discord', key: 'notify_discord', label: 'Discord', on: 'bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-500/30', text: 'text-indigo-500' },
+    { type: 'email', key: 'notify_email', label: 'Email', on: 'bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30', text: 'text-blue-500' },
+    { type: 'telegram', key: 'notify_telegram', label: 'Telegram', on: 'bg-sky-50 dark:bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-500/30', text: 'text-sky-500' },
+    { type: 'ntfy', key: 'notify_ntfy', label: 'ntfy', on: 'bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30', text: 'text-emerald-500' },
+    { type: 'webhook', key: 'notify_webhook', label: 'Webhook', on: 'bg-orange-50 dark:bg-orange-500/10 text-orange-700 dark:text-orange-300 border-orange-200 dark:border-orange-500/30', text: 'text-orange-500' },
+];
+const ready = (type: DestinationType) => props.readyTypes.includes(type);
 
 // ── New alert form ──────────────────────────────────────────────────
 const showForm = ref(false);
@@ -24,10 +36,11 @@ const form = useForm({
     min_avg_viewers: null as number | null,
     language: '',
     keywords: [] as string[],
-    notify_email: props.emailConfigured,
-    notify_discord: props.discordConfigured,
-    notify_telegram: props.telegramConfigured,
-    notify_webhook: props.webhookConfigured,
+    notify_email: ready('email'),
+    notify_discord: ready('discord'),
+    notify_telegram: ready('telegram'),
+    notify_webhook: ready('webhook'),
+    notify_ntfy: ready('ntfy'),
     notify_on_category_change: false,
     notify_on_stream_start: true,
     notification_template: null as AlertNotificationTemplate | null,
@@ -77,7 +90,7 @@ const editShowFilters = ref(false);
 const editForm = useForm({
     name: '', streamer_login: '', category_id: null as number | null, category_ids: [] as number[], category_tags: [] as string[],
     min_viewers: null as number | null, min_avg_viewers: null as number | null, language: '', keywords: [] as string[],
-    notify_email: true, notify_discord: true, notify_telegram: true, notify_webhook: false,
+    notify_email: true, notify_discord: true, notify_telegram: true, notify_webhook: false, notify_ntfy: false,
     notify_on_category_change: false,
     notify_on_stream_start: true,
     notification_template: null as AlertNotificationTemplate | null,
@@ -100,6 +113,7 @@ function startEdit(rule: AlertRule) {
     editForm.notify_discord = rule.notify_discord;
     editForm.notify_telegram = rule.notify_telegram;
     editForm.notify_webhook = rule.notify_webhook;
+    editForm.notify_ntfy = rule.notify_ntfy;
     editForm.notify_on_category_change = rule.notify_on_category_change;
     editForm.notify_on_stream_start = rule.notify_on_stream_start;
     editForm.category_tags = rule.category_tags || [];
@@ -134,13 +148,12 @@ function formatTime(dateStr: string): string {
 }
 
 // Shared warnings check
-function unconfiguredWarnings(f: { notify_email: boolean; notify_discord: boolean; notify_telegram: boolean; notify_webhook: boolean }) {
-    const w: string[] = [];
-    if (f.notify_email && !props.emailConfigured) w.push('Email not configured — Settings → Email');
-    if (f.notify_discord && !props.discordConfigured) w.push('Discord not configured — Settings → Discord');
-    if (f.notify_telegram && !props.telegramConfigured) w.push('Telegram not configured — Settings → Telegram');
-    if (f.notify_webhook && !props.webhookConfigured) w.push('Webhook not configured — Settings → Webhook');
-    return w;
+function unconfiguredWarnings(f: Record<NotifyKey, boolean>) {
+    return CHANNELS
+        .filter(c => f[c.key] && !ready(c.type))
+        .map(c => c.type === 'email'
+            ? 'No enabled Email destination, or no mail server yet — Settings → Notifications'
+            : `No enabled ${c.label} destination — Settings → Notifications`);
 }
 </script>
 
@@ -165,25 +178,10 @@ function unconfiguredWarnings(f: { notify_email: boolean; notify_discord: boolea
                     <!-- Row 1: Notify me via -->
                     <div class="flex flex-wrap items-center gap-2">
                         <span class="text-sm font-semibold text-gray-900 dark:text-white">Notify me via</span>
-                        <label :class="['inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium cursor-pointer transition-all border',
-                            form.notify_discord ? 'bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-500/30' : 'bg-gray-50 dark:bg-zinc-800 text-gray-400 dark:text-zinc-600 border-transparent']">
-                            <input type="checkbox" v-model="form.notify_discord" class="sr-only" />
-                            Discord
-                        </label>
-                        <label :class="['inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium cursor-pointer transition-all border',
-                            form.notify_email ? 'bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30' : 'bg-gray-50 dark:bg-zinc-800 text-gray-400 dark:text-zinc-600 border-transparent']">
-                            <input type="checkbox" v-model="form.notify_email" class="sr-only" />
-                            Email
-                        </label>
-                        <label :class="['inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium cursor-pointer transition-all border',
-                            form.notify_telegram ? 'bg-sky-50 dark:bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-500/30' : 'bg-gray-50 dark:bg-zinc-800 text-gray-400 dark:text-zinc-600 border-transparent']">
-                            <input type="checkbox" v-model="form.notify_telegram" class="sr-only" />
-                            Telegram
-                        </label>
-                        <label :class="['inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium cursor-pointer transition-all border',
-                            form.notify_webhook ? 'bg-orange-50 dark:bg-orange-500/10 text-orange-700 dark:text-orange-300 border-orange-200 dark:border-orange-500/30' : 'bg-gray-50 dark:bg-zinc-800 text-gray-400 dark:text-zinc-600 border-transparent']">
-                            <input type="checkbox" v-model="form.notify_webhook" class="sr-only" />
-                            Webhook
+                        <label v-for="c in CHANNELS" :key="c.key" :class="['inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium cursor-pointer transition-all border',
+                            form[c.key] ? c.on : 'bg-gray-50 dark:bg-zinc-800 text-gray-400 dark:text-zinc-600 border-transparent']">
+                            <input type="checkbox" v-model="form[c.key]" class="sr-only" />
+                            {{ c.label }}
                         </label>
                     </div>
 
@@ -339,10 +337,9 @@ function unconfiguredWarnings(f: { notify_email: boolean; notify_discord: boolea
                             </template>
                         </div>
                         <div class="flex flex-wrap items-center gap-1.5 mt-1.5">
-                            <span v-if="rule.notify_discord" class="text-[10px] font-medium text-indigo-500">Discord</span>
-                            <span v-if="rule.notify_email" class="text-[10px] font-medium text-blue-500">Email</span>
-                            <span v-if="rule.notify_telegram" class="text-[10px] font-medium text-sky-500">Telegram</span>
-                            <span v-if="rule.notify_webhook" class="text-[10px] font-medium text-orange-500">Webhook</span>
+                            <template v-for="c in CHANNELS" :key="c.key">
+                                <span v-if="rule[c.key]" :class="['text-[10px] font-medium', c.text]">{{ c.label }}</span>
+                            </template>
                             <span v-if="rule.latest_tracking" class="text-[10px] text-gray-400 dark:text-zinc-600 ml-1">Last: {{ formatTime(rule.latest_tracking.triggered_at) }}</span>
                         </div>
                     </div>
@@ -365,17 +362,8 @@ function unconfiguredWarnings(f: { notify_email: boolean; notify_discord: boolea
                 <div v-if="editingId === rule.id" class="p-5 bg-gray-50 dark:bg-zinc-950/50 space-y-4 border-t border-gray-100 dark:border-zinc-800">
                     <div class="flex flex-wrap items-center gap-2">
                         <span class="text-sm font-semibold text-gray-900 dark:text-white">Notify me via</span>
-                        <label :class="['inline-flex px-3 py-1.5 rounded-full text-xs font-medium cursor-pointer transition-all border', editForm.notify_discord ? 'bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-500/30' : 'bg-gray-100 dark:bg-zinc-800 text-gray-400 dark:text-zinc-600 border-transparent']">
-                            <input type="checkbox" v-model="editForm.notify_discord" class="sr-only" /> Discord
-                        </label>
-                        <label :class="['inline-flex px-3 py-1.5 rounded-full text-xs font-medium cursor-pointer transition-all border', editForm.notify_email ? 'bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30' : 'bg-gray-100 dark:bg-zinc-800 text-gray-400 dark:text-zinc-600 border-transparent']">
-                            <input type="checkbox" v-model="editForm.notify_email" class="sr-only" /> Email
-                        </label>
-                        <label :class="['inline-flex px-3 py-1.5 rounded-full text-xs font-medium cursor-pointer transition-all border', editForm.notify_telegram ? 'bg-sky-50 dark:bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-500/30' : 'bg-gray-100 dark:bg-zinc-800 text-gray-400 dark:text-zinc-600 border-transparent']">
-                            <input type="checkbox" v-model="editForm.notify_telegram" class="sr-only" /> Telegram
-                        </label>
-                        <label :class="['inline-flex px-3 py-1.5 rounded-full text-xs font-medium cursor-pointer transition-all border', editForm.notify_webhook ? 'bg-orange-50 dark:bg-orange-500/10 text-orange-700 dark:text-orange-300 border-orange-200 dark:border-orange-500/30' : 'bg-gray-100 dark:bg-zinc-800 text-gray-400 dark:text-zinc-600 border-transparent']">
-                            <input type="checkbox" v-model="editForm.notify_webhook" class="sr-only" /> Webhook
+                        <label v-for="c in CHANNELS" :key="c.key" :class="['inline-flex px-3 py-1.5 rounded-full text-xs font-medium cursor-pointer transition-all border', editForm[c.key] ? c.on : 'bg-gray-100 dark:bg-zinc-800 text-gray-400 dark:text-zinc-600 border-transparent']">
+                            <input type="checkbox" v-model="editForm[c.key]" class="sr-only" /> {{ c.label }}
                         </label>
                     </div>
                     <div class="flex flex-wrap items-center gap-2">

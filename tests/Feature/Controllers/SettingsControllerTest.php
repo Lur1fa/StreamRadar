@@ -7,8 +7,7 @@ use App\Models\Setting;
 use App\Models\TrackedChannel;
 use App\Services\TwitchApiService;
 use Illuminate\Http\UploadedFile;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\DB;
 
 test('GET /settings returns 200 with settings', function () {
     $this->get('/settings')
@@ -44,7 +43,7 @@ test('PUT /settings normalises booleans and validates numbers', function () {
 
     $this->from('/settings')->put('/settings', ['sync_frequency_minutes' => 0])->assertSessionHasErrors('sync_frequency_minutes');
     $this->from('/settings')->put('/settings', ['theme' => 'neon'])->assertSessionHasErrors('theme');
-    $this->from('/settings')->put('/settings', ['mail_to' => 'not-an-email'])->assertSessionHasErrors('mail_to');
+    $this->from('/settings')->put('/settings', ['smtp_port' => 'abc'])->assertSessionHasErrors('smtp_port');
 });
 
 test('PUT /settings does not overwrite a secret with its mask or an empty value', function () {
@@ -61,22 +60,24 @@ test('PUT /settings does not overwrite a secret with its mask or an empty value'
 });
 
 test('PUT /settings can explicitly clear a secret', function () {
-    setAccountSetting('telegram_bot_token', '123456:ABCDEFghijklmnopqrstuvwxyz');
+    Setting::set('smtp_password', 'hunter2hunter2');
 
-    $this->put('/settings', ['clear_secrets' => ['telegram_bot_token']])->assertRedirect();
+    $this->put('/settings', ['clear_secrets' => ['smtp_password']])->assertRedirect();
 
-    expect(getAccountSetting('telegram_bot_token'))->toBeNull();
+    expect(Setting::get('smtp_password'))->toBeNull();
 });
 
-test('PUT /settings rejects an invalid Telegram token or chat id format', function () {
-    $this->from('/settings')->put('/settings', ['telegram_bot_token' => 'not a token'])->assertSessionHasErrors('telegram_bot_token');
-    $this->from('/settings')->put('/settings', ['telegram_chat_id' => 'abc'])->assertSessionHasErrors('telegram_chat_id');
+test('PUT /settings ignores the alert destination keys of the old settings', function () {
+    $this->put('/settings', ['mail_to' => 'old@example.com', 'webhook_url' => 'https://hooks.example.com/x'])->assertRedirect()->assertSessionHasNoErrors();
+
+    expect(getAccountSetting('mail_to'))->toBeNull()
+        ->and(getAccountSetting('webhook_url'))->toBeNull();
 });
 
 test('secrets are stored encrypted at rest', function () {
     Setting::set('smtp_password', 'hunter2hunter2');
 
-    $raw = \Illuminate\Support\Facades\DB::table('settings')->where('key', 'smtp_password')->value('value');
+    $raw = DB::table('settings')->where('key', 'smtp_password')->value('value');
 
     expect($raw)->not->toContain('hunter2')
         ->and(Setting::get('smtp_password'))->toBe('hunter2hunter2');
@@ -91,7 +92,7 @@ test('GET /settings/export returns JSON with data', function () {
     $response = $this->get('/settings/export')->assertOk();
     $data = $response->json();
 
-    expect($data)->toHaveKeys(['settings', 'categories', 'channels', 'blacklist', 'tag_filters', 'alerts'])
+    expect($data)->toHaveKeys(['settings', 'categories', 'channels', 'blacklist', 'tag_filters', 'alerts', 'destinations'])
         ->and($data['settings']['theme'])->toBe('dark');
 });
 
@@ -142,32 +143,6 @@ test('POST /settings/test-twitch calls testConnection', function () {
     });
 
     $this->postJson('/settings/test-twitch')->assertOk()->assertJson(['success' => true]);
-});
-
-test('POST /settings/test-discord sends webhook', function () {
-    Http::fake(['discord.com/*' => Http::response(null, 204)]);
-    setAccountSetting('discord_webhook_url', 'https://discord.com/api/webhooks/123/token');
-
-    $this->mock(TwitchApiService::class, function ($mock) {
-        $mock->shouldReceive('isConfigured')->andReturn(false);
-        $mock->shouldReceive('getUsers')->andReturn([]);
-    });
-
-    $this->postJson('/settings/test-discord')->assertOk()->assertJson(['success' => true]);
-    Http::assertSent(fn ($request) => str_starts_with($request->url(), 'https://discord.com/api/webhooks/') && $request['allowed_mentions'] === ['parse' => []]);
-});
-
-test('POST /settings/test-email sends test email', function () {
-    Mail::fake();
-    setAccountSetting('mail_to', 'test@example.com');
-
-    $this->mock(TwitchApiService::class, function ($mock) {
-        $mock->shouldReceive('isConfigured')->andReturn(false);
-        $mock->shouldReceive('getUsers')->andReturn([]);
-    });
-
-    $this->postJson('/settings/test-email')->assertOk();
-    Mail::assertSentCount(1);
 });
 
 test('GET /settings/check-update does not require a shell', function () {

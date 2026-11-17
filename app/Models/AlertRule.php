@@ -7,10 +7,12 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class AlertRule extends Model
 {
     use BelongsToOwner, HasFactory;
+
     protected $fillable = [
         'name',
         'streamer_login',
@@ -63,7 +65,7 @@ class AlertRule extends Model
         return $this->hasMany(StreamAlertTracking::class);
     }
 
-    public function latestTracking(): \Illuminate\Database\Eloquent\Relations\HasOne
+    public function latestTracking(): HasOne
     {
         return $this->hasOne(StreamAlertTracking::class)->whereNotNull('triggered_at')->latestOfMany('triggered_at');
     }

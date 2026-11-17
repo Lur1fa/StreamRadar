@@ -71,11 +71,13 @@ final class Redactor
         foreach ($data as $key => $value) {
             if (self::isSensitiveKey($key)) {
                 $data[$key] = self::REDACTED;
+
                 continue;
             }
 
             if (is_array($value)) {
                 $data[$key] = self::walk($value, $secrets);
+
                 continue;
             }
 

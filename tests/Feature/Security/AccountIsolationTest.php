@@ -5,6 +5,7 @@ use App\Models\AlertRule;
 use App\Models\BlacklistRule;
 use App\Models\Category;
 use App\Models\HistoryEvent;
+use App\Models\NotificationDestination;
 use App\Models\Setting;
 use App\Models\Stream;
 use App\Models\StreamAlertTracking;
@@ -17,6 +18,7 @@ use App\Services\SyncService;
 use App\Services\TwitchApiService;
 use App\Services\TwitchTrackerService;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 
@@ -321,9 +323,9 @@ test('an alert fires only for its own account and is delivered to that account\'
     Category::factory()->for($this->bob, 'owner')->create(['twitch_id' => '777']);
 
     // Alice wants Discord, Bob wants e-mail; only Alice has an alert rule that matches.
-    setAccountSetting('discord_webhook_url', 'https://discord.com/api/webhooks/1/alice', $this->alice);
-    setAccountSetting('discord_webhook_url', 'https://discord.com/api/webhooks/2/bob', $this->bob);
-    setAccountSetting('mail_to', 'bob@example.com', $this->bob);
+    destination('discord', [], ['webhook_url' => 'https://discord.com/api/webhooks/1/alice'], $this->alice);
+    destination('discord', [], ['webhook_url' => 'https://discord.com/api/webhooks/2/bob'], $this->bob);
+    destination('email', ['to' => 'bob@example.com'], [], $this->bob);
     AlertRule::factory()->for($this->alice, 'owner')->withDiscord()->create(['name' => 'Alice rule']);
     AlertRule::factory()->for($this->bob, 'owner')->withDiscord()->withEmail()->create(['name' => 'Bob rule', 'min_viewers' => 100000]);
 
@@ -350,11 +352,11 @@ test('two accounts with the same alert are each notified at their own destinatio
     foreach ([$this->alice, $this->bob] as $account) {
         Category::factory()->for($account, 'owner')->create(['twitch_id' => '777']);
         AlertRule::factory()->for($account, 'owner')->withDiscord()->withEmail()->create();
-        setAccountSetting('discord_webhook_url', "https://discord.com/api/webhooks/{$account->id}/token", $account);
-        setAccountSetting('mail_to', $account->email, $account);
+        destination('discord', [], ['webhook_url' => "https://discord.com/api/webhooks/{$account->id}/token"], $account);
+        destination('email', ['to' => $account->email], [], $account);
     }
     Setting::set('smtp_host', 'smtp.example.com');
-    setAccountSetting('notifications_email_enabled', '0', $this->bob);
+    NotificationDestination::ownedBy($this->bob)->where('type', 'email')->update(['enabled' => false]);
 
     $twitch->shouldReceive('getAllStreamsForCategory')->andReturn([liveStream()]);
     $twitch->shouldReceive('getStreamsByUsers')->andReturn([]);
@@ -374,49 +376,47 @@ test('two accounts with the same alert are each notified at their own destinatio
 // ── Settings ─────────────────────────────────────────────────────────
 
 test('every account saves its own filters and alert destinations', function () {
-    $this->actingAs($this->alice)->put('/settings', [
-        'global_min_viewers' => 50,
-        'theme' => 'dark',
-        'mail_to' => 'alice-alerts@example.com',
-        'webhook_url' => 'https://hooks.example.com/alice',
+    $this->actingAs($this->alice)->put('/settings', ['global_min_viewers' => 50, 'theme' => 'dark'])->assertSessionHasNoErrors();
+    $this->post('/settings/destinations', [
+        'name' => 'Alice mail', 'type' => 'email', 'enabled' => true, 'config' => ['to' => 'alice-alerts@example.com'],
     ])->assertSessionHasNoErrors();
 
-    $this->actingAs($this->bob)->put('/settings', [
-        'global_min_viewers' => 900,
-        'webhook_url' => 'https://hooks.example.com/bob',
+    $this->actingAs($this->bob)->put('/settings', ['global_min_viewers' => 900])->assertSessionHasNoErrors();
+    $this->post('/settings/destinations', [
+        'name' => 'Bob hook', 'type' => 'webhook', 'enabled' => true,
+        'config' => ['method' => 'POST', 'auth' => 'none'], 'secrets' => ['url' => 'https://hooks.example.com/bob'],
     ])->assertSessionHasNoErrors();
 
     expect(UserSetting::get($this->alice, 'global_min_viewers'))->toBe('50')
-        ->and(UserSetting::get($this->alice, 'webhook_url'))->toBe('https://hooks.example.com/alice')
-        ->and(UserSetting::get($this->alice, 'mail_to'))->toBe('alice-alerts@example.com')
         ->and(UserSetting::get($this->bob, 'global_min_viewers'))->toBe('900')
-        ->and(UserSetting::get($this->bob, 'webhook_url'))->toBe('https://hooks.example.com/bob')
-        ->and(UserSetting::get($this->bob, 'mail_to'))->toBeNull();
+        ->and(NotificationDestination::ownedBy($this->alice)->pluck('name')->all())->toBe(['Alice mail'])
+        ->and(NotificationDestination::ownedBy($this->bob)->pluck('name')->all())->toBe(['Bob hook']);
 
     // Nothing of this lands in the installation's settings.
-    expect(Setting::get('webhook_url'))->toBeNull()->and(Setting::get('global_min_viewers'))->toBeNull();
+    expect(Setting::get('global_min_viewers'))->toBeNull();
 
+    $this->actingAs($this->alice)->get('/settings')->assertInertia(fn ($page) => $page->has('destinations', 1)->where('destinations.0.name', 'Alice mail'));
     $this->actingAs($this->alice)->get('/')->assertInertia(fn ($page) => $page->where('appSettings.theme', 'dark'));
     $this->actingAs($this->bob)->get('/')->assertInertia(fn ($page) => $page->where('appSettings.theme', 'system'));
 });
 
 test('an account\'s destinations are stored encrypted and only ever shown masked, and only to that account', function () {
-    setAccountSetting('webhook_url', 'https://hooks.example.com/secret-path-alice', $this->alice);
-    setAccountSetting('telegram_bot_token', '123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', $this->alice);
+    destination('webhook', ['method' => 'POST', 'auth' => 'none'], ['url' => 'https://hooks.example.com/secret-path-alice'], $this->alice);
+    destination('telegram', ['chat_id' => '42'], ['bot_token' => '123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'], $this->alice);
 
-    $raw = UserSetting::where('user_id', $this->alice->id)->where('key', 'webhook_url')->value('value');
-    expect($raw)->not->toContain('secret-path-alice');
+    $raw = DB::table('notification_destinations')->pluck('secrets')->implode(' ');
+    expect($raw)->not->toContain('secret-path-alice')->not->toContain('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
 
     $response = $this->actingAs($this->alice)->get('/settings');
     $response->assertInertia(fn ($page) => $page
-        ->where('settings.webhook_url_set', true)
-        ->where('settings.telegram_bot_token_set', true)
-        ->missing('settings.webhook_url')
-        ->missing('settings.telegram_bot_token'));
+        ->where('destinations.0.secrets_set.url', true)
+        ->where('destinations.1.secrets_set.bot_token', true)
+        ->missing('destinations.0.secrets')
+        ->missing('destinations.1.secrets'));
     expect($response->getContent())->not->toContain('secret-path-alice')->not->toContain('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
 
     $response = $this->actingAs($this->bob)->get('/settings');
-    $response->assertInertia(fn ($page) => $page->where('settings.webhook_url_set', false)->where('settings.webhook_url_masked', null));
+    $response->assertInertia(fn ($page) => $page->has('destinations', 0));
     expect($response->getContent())->not->toContain('hooks.example.com');
 });
 
@@ -475,23 +475,25 @@ test('an administrator saves installation settings and their own settings in one
 });
 
 test('a regular account\'s webhook is still held to the outbound URL rules', function () {
-    $this->actingAs($this->bob)->put('/settings', ['webhook_url' => 'http://127.0.0.1:8080/internal'])
-        ->assertSessionHasErrors('webhook_url');
-    $this->put('/settings', ['discord_webhook_url' => 'https://example.com/not-discord'])
-        ->assertSessionHasErrors('discord_webhook_url');
+    $this->actingAs($this->bob)->post('/settings/destinations', [
+        'name' => 'Internal', 'type' => 'webhook', 'enabled' => true,
+        'config' => ['method' => 'POST', 'auth' => 'none'], 'secrets' => ['url' => 'http://127.0.0.1:8080/internal'],
+    ])->assertSessionHasErrors('secrets.url');
+    $this->post('/settings/destinations', [
+        'name' => 'Fake Discord', 'type' => 'discord', 'enabled' => true, 'secrets' => ['webhook_url' => 'https://example.com/not-discord'],
+    ])->assertSessionHasErrors('secrets.webhook_url');
 
-    expect(UserSetting::get($this->bob, 'webhook_url'))->toBeNull();
+    expect(NotificationDestination::ownedBy($this->bob)->count())->toBe(0);
 });
 
 test('testing a destination uses the signed-in account\'s own destination', function () {
     Http::fake();
-    $this->mock(TwitchApiService::class, fn ($mock) => $mock->shouldReceive('getUsers')->andReturn([]));
-    setAccountSetting('webhook_url', 'https://hooks.example.com/alice', $this->alice);
+    $alices = destination('webhook', ['method' => 'POST', 'auth' => 'none'], ['url' => 'https://hooks.example.com/alice'], $this->alice);
 
-    $this->actingAs($this->bob)->postJson('/settings/test-webhook')->assertJson(['success' => false]);
+    $this->actingAs($this->bob)->postJson("/settings/destinations/{$alices->id}/test")->assertNotFound();
     Http::assertNothingSent();
 
-    $this->actingAs($this->alice)->postJson('/settings/test-webhook')->assertJson(['success' => true]);
+    $this->actingAs($this->alice)->postJson("/settings/destinations/{$alices->id}/test")->assertJson(['success' => true]);
     Http::assertSent(fn ($request) => $request->url() === 'https://hooks.example.com/alice');
 });
 
@@ -507,12 +509,13 @@ test('deleting an account deletes everything it owns and nothing else', function
         TagFilter::createFor($account, ['tag' => 'retro']);
         $rule = AlertRule::factory()->for($account, 'owner')->create();
         StreamAlertTracking::create(['alert_rule_id' => $rule->id, 'stream_twitch_id' => 'x', 'streamer_login' => 'x']);
-        setAccountSetting('webhook_url', 'https://hooks.example.com/'.$account->id, $account);
+        setAccountSetting('theme', 'dark', $account);
+        destination('webhook', ['method' => 'POST', 'auth' => 'none'], ['url' => 'https://hooks.example.com/'.$account->id], $account);
     }
 
     $this->actingAs(User::factory()->admin()->create())->delete("/users/{$this->bob->id}")->assertRedirect();
 
-    foreach ([Category::class, Stream::class, TrackedChannel::class, BlacklistRule::class, HistoryEvent::class, TagFilter::class, AlertRule::class] as $model) {
+    foreach ([Category::class, Stream::class, TrackedChannel::class, BlacklistRule::class, HistoryEvent::class, TagFilter::class, AlertRule::class, NotificationDestination::class] as $model) {
         expect($model::ownedBy($this->bob->id)->count())->toBe(0, $model)
             ->and($model::ownedBy($this->alice)->count())->toBe(1, $model);
     }
@@ -533,14 +536,14 @@ test('a backup contains only the exporting administrator\'s own data and imports
     Category::factory()->for($admin, 'owner')->create(['twitch_id' => '111', 'name' => 'Admin Game']);
     Category::factory()->for($this->alice, 'owner')->create(['twitch_id' => '222', 'name' => 'Alice Game']);
     AlertRule::factory()->for($this->alice, 'owner')->create(['name' => 'Alice Alert']);
-    setAccountSetting('mail_to', 'admin-alerts@example.com', $admin);
-    setAccountSetting('mail_to', 'alice-alerts@example.com', $this->alice);
+    destination('email', ['to' => 'admin-alerts@example.com'], [], $admin);
+    destination('email', ['to' => 'alice-alerts@example.com'], [], $this->alice);
 
     $export = $this->actingAs($admin)->getJson('/settings/export')->assertOk()->json();
 
     expect(collect($export['categories'])->pluck('name')->all())->toBe(['Admin Game'])
         ->and($export['alerts'])->toBe([])
-        ->and($export['settings']['mail_to'])->toBe('admin-alerts@example.com')
+        ->and($export['destinations'])->toBe([['name' => 'Email', 'type' => 'email', 'enabled' => true, 'config' => ['to' => 'admin-alerts@example.com', 'subject_prefix' => '']]])
         ->and(json_encode($export))->not->toContain('Alice');
 
     // Importing the same file as another administrator creates their own copy.
@@ -549,7 +552,7 @@ test('a backup contains only the exporting administrator\'s own data and imports
     $this->actingAs($other)->post('/settings/import', ['file' => $file])->assertSessionMissing('error');
 
     expect(Category::ownedBy($other)->pluck('name')->all())->toBe(['Admin Game'])
-        ->and(UserSetting::get($other, 'mail_to'))->toBe('admin-alerts@example.com')
+        ->and(NotificationDestination::ownedBy($other)->sole()->recipients())->toBe(['admin-alerts@example.com'])
         ->and(Category::ownedBy($admin)->count())->toBe(1)
         ->and(Category::ownedBy($this->alice)->pluck('name')->all())->toBe(['Alice Game']);
 });
@@ -557,20 +560,21 @@ test('a backup contains only the exporting administrator\'s own data and imports
 test('a rejected webhook is reported on the field and says how to allow a self-hosted server', function () {
     // The suite resolves every host to a public address; make this one private.
     app()->instance(OutboundUrlGuard::class, new OutboundUrlGuard(fn (string $host) => ['192.168.1.20']));
+    $payload = [
+        'name' => 'Home hook', 'type' => 'webhook', 'enabled' => true,
+        'config' => ['method' => 'POST', 'auth' => 'none'], 'secrets' => ['url' => 'https://hooks.home.example.net/in'],
+    ];
 
-    $this->actingAs($this->bob)
-        ->put('/settings', ['webhook_url' => 'https://ntfy.home.example.net/topic', 'global_min_viewers' => 5])
-        ->assertSessionHasErrors(['webhook_url' => 'The webhook url is not allowed: The URL resolves to a private, loopback or reserved address. To use a server on your own network, ask an administrator to allow its host name.']);
+    $this->actingAs($this->bob)->post('/settings/destinations', $payload)
+        ->assertSessionHasErrors(['secrets.url' => 'The URL is not allowed: The URL resolves to a private, loopback or reserved address. To use a server on your own network, ask an administrator to allow its host name.']);
 
     $admin = User::factory()->admin()->create();
-    $this->actingAs($admin)
-        ->put('/settings', ['webhook_url' => 'https://ntfy.home.example.net/topic'])
-        ->assertSessionHasErrors('webhook_url');
-    expect(session('errors')->first('webhook_url'))->toContain('WEBHOOK_ALLOWED_HOSTS');
+    $this->actingAs($admin)->post('/settings/destinations', $payload)->assertSessionHasErrors('secrets.url');
+    expect(session('errors')->first('secrets.url'))->toContain('WEBHOOK_ALLOWED_HOSTS');
 
     // Once the host is allowed, the same URL is accepted.
-    config(['security.webhook.allowed_hosts' => ['ntfy.home.example.net']]);
+    config(['security.webhook.allowed_hosts' => ['hooks.home.example.net']]);
     app()->instance(OutboundUrlGuard::class, new OutboundUrlGuard(fn (string $host) => ['192.168.1.20']));
-    $this->put('/settings', ['webhook_url' => 'https://ntfy.home.example.net/topic'])->assertSessionHasNoErrors();
-    expect(UserSetting::get($admin, 'webhook_url'))->toBe('https://ntfy.home.example.net/topic');
+    $this->post('/settings/destinations', $payload)->assertSessionHasNoErrors();
+    expect(NotificationDestination::ownedBy($admin)->sole()->secret('url'))->toBe('https://hooks.home.example.net/in');
 });

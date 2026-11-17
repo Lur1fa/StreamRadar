@@ -71,6 +71,7 @@ class AlertService
                     ['alert_rule_id' => $rule->id, 'stream_twitch_id' => $stream->twitch_id],
                     ['streamer_login' => $stream->user_login],
                 );
+
                 continue;
             }
 

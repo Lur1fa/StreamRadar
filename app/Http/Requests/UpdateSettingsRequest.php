@@ -112,10 +112,12 @@ class UpdateSettingsRequest extends FormRequest
                 if (! Setting::isSecret($key)) {
                     $out[$key] = null;
                 }
+
                 continue;
             }
             if (in_array($key, self::BOOLEAN_KEYS, true)) {
                 $out[$key] = filter_var($value, FILTER_VALIDATE_BOOLEAN) ? '1' : '0';
+
                 continue;
             }
             $out[$key] = is_bool($value) ? ($value ? '1' : '0') : (string) $value;

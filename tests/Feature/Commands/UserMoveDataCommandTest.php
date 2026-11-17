@@ -4,6 +4,7 @@ use App\Models\AlertRule;
 use App\Models\BlacklistRule;
 use App\Models\Category;
 use App\Models\HistoryEvent;
+use App\Models\NotificationDestination;
 use App\Models\Stream;
 use App\Models\StreamAlertTracking;
 use App\Models\TagFilter;
@@ -21,7 +22,7 @@ function giveData(User $account, string $twitchId = '777'): AlertRule
     TagFilter::createFor($account, ['tag' => 'retro']);
     $rule = AlertRule::factory()->for($account, 'owner')->create(['category_id' => $category->id, 'category_ids' => [$category->id]]);
     StreamAlertTracking::create(['alert_rule_id' => $rule->id, 'stream_twitch_id' => 's'.$twitchId, 'streamer_login' => 'x']);
-    UserSetting::set($account, 'webhook_url', 'https://hooks.example.com/'.$account->id);
+    destination('webhook', ['method' => 'POST', 'auth' => 'none'], ['url' => 'https://hooks.example.com/'.$account->id], $account, name: 'Hook of '.$account->id);
     UserSetting::set($account, 'global_min_viewers', '50');
 
     return $rule;
@@ -51,7 +52,8 @@ test('moves everything one account owns to another account', function () {
         ->and($moved->trackings()->count())->toBe(1);
 
     // Alert destinations and filters move too, still decryptable.
-    expect(UserSetting::get($this->daily, 'webhook_url'))->toBe('https://hooks.example.com/'.$this->admin->id)
+    expect(NotificationDestination::ownedBy($this->daily)->sole()->secret('url'))->toBe('https://hooks.example.com/'.$this->admin->id)
+        ->and(NotificationDestination::ownedBy($this->admin)->count())->toBe(0)
         ->and(UserSetting::get($this->daily, 'global_min_viewers'))->toBe('50')
         ->and(UserSetting::where('user_id', $this->admin->id)->count())->toBe(0);
 });
@@ -81,7 +83,18 @@ test('--replace deletes the target\'s data first', function () {
         ->and(HistoryEvent::ownedBy($this->daily)->count())->toBe(2)
         ->and(StreamAlertTracking::count())->toBe(1)
         ->and(Category::ownedBy($this->admin)->count())->toBe(0)
-        ->and(UserSetting::get($this->daily, 'webhook_url'))->toBe('https://hooks.example.com/'.$this->admin->id);
+        // Destinations are kept, like settings: the target ends up with both.
+        ->and(NotificationDestination::ownedBy($this->daily)->orderBy('id')->get()->map(fn ($d) => $d->secret('url'))->all())
+        ->toBe(['https://hooks.example.com/'.$this->admin->id, 'https://hooks.example.com/'.$this->daily->id]);
+});
+
+test('alert destinations alone do not stop a move', function () {
+    giveData($this->admin);
+    destination('email', ['to' => 'me@example.com'], [], $this->daily);
+
+    $this->artisan('user:move-data', ['from' => 'admin@example.com', 'to' => 'me@example.com', '--force' => true])->assertSuccessful();
+
+    expect(NotificationDestination::ownedBy($this->daily)->count())->toBe(2);
 });
 
 test('asks before moving and does nothing when declined', function () {

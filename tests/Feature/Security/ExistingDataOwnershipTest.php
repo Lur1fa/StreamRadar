@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Category;
+use App\Models\NotificationDestination;
 use App\Models\Setting;
 use App\Models\User;
 use App\Models\UserSetting;
@@ -48,16 +49,21 @@ test('existing shared data and destinations are handed to one account, installat
 
     $counts = app(AccountDataService::class)->adoptOrphans($oldestAdmin);
 
-    expect($counts)->toMatchArray(['categories' => 1, 'streams' => 1, 'tracked_channels' => 1, 'blacklist_rules' => 1, 'tag_filters' => 1, 'alert_rules' => 1, 'history_events' => 1, 'settings' => 3]);
+    expect($counts)->toMatchArray(['categories' => 1, 'streams' => 1, 'tracked_channels' => 1, 'blacklist_rules' => 1, 'tag_filters' => 1, 'alert_rules' => 1, 'history_events' => 1, 'settings' => 1, 'notification_destinations' => 2]);
 
-    foreach (AccountDataService::TABLES as $table) {
+    foreach ([...AccountDataService::CONFIG_TABLES, ...AccountDataService::DERIVED_TABLES] as $table) {
         expect(DB::table($table)->where('owner_id', $first->id)->count())->toBe(1, $table)
             ->and(DB::table($table)->where('owner_id', '!=', $first->id)->orWhereNull('owner_id')->count())->toBe(0, $table);
     }
 
-    expect(UserSetting::get($first, 'mail_to'))->toBe('old@example.com')
-        ->and(UserSetting::get($first, 'discord_webhook_url'))->toBe('https://discord.com/api/webhooks/1/old')
-        ->and(UserSetting::get($first, 'global_min_viewers'))->toBe('42')
+    // The old one-per-channel destinations became destinations of that account.
+    $destinations = NotificationDestination::ownedBy($first)->orderBy('id')->get();
+    expect($destinations->map(fn ($d) => $d->type->value)->all())->toBe(['email', 'discord'])
+        ->and($destinations[0]->recipients())->toBe(['old@example.com'])
+        ->and($destinations[1]->secret('webhook_url'))->toBe('https://discord.com/api/webhooks/1/old')
+        ->and(NotificationDestination::where('owner_id', '!=', $first->id)->count())->toBe(0);
+
+    expect(UserSetting::get($first, 'global_min_viewers'))->toBe('42')
         ->and(UserSetting::where('user_id', $second->id)->count())->toBe(0)
         ->and(UserSetting::where('user_id', $regular->id)->count())->toBe(0);
 
@@ -91,18 +97,18 @@ test('with no account yet, the data waits for the first administrator', function
     $regular->forceFill(['role' => User::ROLE_ADMIN])->save();
 
     expect(DB::table('categories')->where('owner_id', $regular->id)->count())->toBe(1)
-        ->and(UserSetting::get($regular, 'mail_to'))->toBe('old@example.com')
+        ->and(NotificationDestination::ownedBy($regular)->where('type', 'email')->sole()->recipients())->toBe(['old@example.com'])
         ->and(app(AccountDataService::class)->hasOrphans())->toBeFalse();
 });
 
 test('a later administrator does not take over anybody\'s data', function () {
     $first = User::factory()->admin()->create();
     Category::factory()->for($first, 'owner')->create();
-    UserSetting::set($first, 'mail_to', 'first@example.com');
+    destination('email', ['to' => 'first@example.com'], [], $first);
 
     $second = User::factory()->admin()->create();
 
     expect(Category::ownedBy($first)->count())->toBe(1)
         ->and(Category::ownedBy($second)->count())->toBe(0)
-        ->and(UserSetting::get($second, 'mail_to'))->toBeNull();
+        ->and(NotificationDestination::ownedBy($second)->count())->toBe(0);
 });

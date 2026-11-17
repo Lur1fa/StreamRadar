@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\NotificationDestination;
 use App\Models\User;
 use App\Models\UserSetting;
 use App\Services\Http\OutboundUrlGuard;
@@ -34,6 +35,18 @@ function testOwner(): User
 function setAccountSetting(string $key, mixed $value, ?User $user = null): void
 {
     UserSetting::set($user ?? testOwner(), $key, $value);
+}
+
+/** An alert destination of one account (ntfy, webhook, email, telegram, discord). */
+function destination(string $type, array $config = [], array $secrets = [], ?User $owner = null, bool $enabled = true, ?string $name = null): NotificationDestination
+{
+    return NotificationDestination::createFor($owner ?? testOwner(), [
+        'name' => $name ?? ucfirst($type),
+        'type' => $type,
+        'enabled' => $enabled,
+        'config' => $config,
+        'secrets' => $secrets,
+    ]);
 }
 
 function getAccountSetting(string $key, mixed $default = null, ?User $user = null): mixed

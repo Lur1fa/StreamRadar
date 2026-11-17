@@ -46,7 +46,7 @@ dataset('own data writes', [
     ['post', '/blacklist'],
     ['delete', '/history'],
     ['put', '/settings'],
-    ['post', '/settings/test-webhook'],
+    ['post', '/settings/destinations'],
     ['post', '/tracking/channels'],
     ['post', '/tracking/categories'],
     ['post', '/tracking/tag-filters'],

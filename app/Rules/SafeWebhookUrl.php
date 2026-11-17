@@ -34,7 +34,16 @@ class SafeWebhookUrl implements ValidationRule
         try {
             app(OutboundUrlGuard::class)->validate($value, $this->allowedHosts, $this->requireHttps, $this->pathPrefix);
         } catch (UnsafeUrlException $e) {
-            $fail('The :attribute is not allowed: '.$e->getMessage());
+            $message = 'The :attribute is not allowed: '.$e->getMessage();
+
+            // A self-hosted target on the local network can be allowed by the operator.
+            if ($e->allowable && $this->allowedHosts === []) {
+                $message .= auth()->user()?->isAdmin()
+                    ? ' To use a server on your own network, add its host name to WEBHOOK_ALLOWED_HOSTS and recreate the container.'
+                    : ' To use a server on your own network, ask an administrator to allow its host name.';
+            }
+
+            $fail($message);
         }
     }
 }

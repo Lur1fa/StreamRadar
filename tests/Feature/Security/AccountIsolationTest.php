@@ -12,6 +12,7 @@ use App\Models\TagFilter;
 use App\Models\TrackedChannel;
 use App\Models\User;
 use App\Models\UserSetting;
+use App\Services\Http\OutboundUrlGuard;
 use App\Services\SyncService;
 use App\Services\TwitchApiService;
 use App\Services\TwitchTrackerService;
@@ -551,4 +552,25 @@ test('a backup contains only the exporting administrator\'s own data and imports
         ->and(UserSetting::get($other, 'mail_to'))->toBe('admin-alerts@example.com')
         ->and(Category::ownedBy($admin)->count())->toBe(1)
         ->and(Category::ownedBy($this->alice)->pluck('name')->all())->toBe(['Alice Game']);
+});
+
+test('a rejected webhook is reported on the field and says how to allow a self-hosted server', function () {
+    // The suite resolves every host to a public address; make this one private.
+    app()->instance(OutboundUrlGuard::class, new OutboundUrlGuard(fn (string $host) => ['192.168.1.20']));
+
+    $this->actingAs($this->bob)
+        ->put('/settings', ['webhook_url' => 'https://ntfy.home.example.net/topic', 'global_min_viewers' => 5])
+        ->assertSessionHasErrors(['webhook_url' => 'The webhook url is not allowed: The URL resolves to a private, loopback or reserved address. To use a server on your own network, ask an administrator to allow its host name.']);
+
+    $admin = User::factory()->admin()->create();
+    $this->actingAs($admin)
+        ->put('/settings', ['webhook_url' => 'https://ntfy.home.example.net/topic'])
+        ->assertSessionHasErrors('webhook_url');
+    expect(session('errors')->first('webhook_url'))->toContain('WEBHOOK_ALLOWED_HOSTS');
+
+    // Once the host is allowed, the same URL is accepted.
+    config(['security.webhook.allowed_hosts' => ['ntfy.home.example.net']]);
+    app()->instance(OutboundUrlGuard::class, new OutboundUrlGuard(fn (string $host) => ['192.168.1.20']));
+    $this->put('/settings', ['webhook_url' => 'https://ntfy.home.example.net/topic'])->assertSessionHasNoErrors();
+    expect(UserSetting::get($admin, 'webhook_url'))->toBe('https://ntfy.home.example.net/topic');
 });

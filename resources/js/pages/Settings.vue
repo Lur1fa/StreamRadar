@@ -73,12 +73,37 @@ function removeLang(l: string) { globalLangs.value = globalLangs.value.filter(x 
 function addKw() { const v = kwInput.value.trim(); if (v && !globalKws.value.includes(v)) globalKws.value.push(v); kwInput.value = ''; }
 function removeKw(k: string) { globalKws.value = globalKws.value.filter(x => x !== k); }
 
+// Validation errors come back per field. They are shown under the field and
+// summarised in the save bar, so a rejected value is never silently dropped.
+const FIELD_LABELS: Record<string, string> = {
+    twitch_client_id: 'Twitch Client ID', twitch_client_secret: 'Twitch Client Secret',
+    auto_sync_enabled: 'Auto scanning', sync_frequency_minutes: 'Scan frequency',
+    global_min_viewers: 'Min viewers', global_min_avg_viewers: 'Min avg viewers',
+    global_languages: 'Languages', global_keywords: 'Keywords', theme: 'Theme',
+    mail_to: 'Recipient email', smtp_host: 'SMTP host', smtp_port: 'SMTP port',
+    smtp_username: 'SMTP username', smtp_password: 'SMTP password', smtp_encryption: 'SMTP encryption',
+    mail_from_address: 'From address', mail_from_name: 'From name',
+    discord_webhook_url: 'Discord webhook URL', telegram_bot_token: 'Telegram bot token',
+    telegram_chat_id: 'Telegram chat ID', webhook_url: 'Webhook URL', webhook_format: 'Webhook format',
+};
+const errorList = computed(() => Object.entries(form.errors as Record<string, string>)
+    .map(([key, message]) => ({ key, label: FIELD_LABELS[key] ?? key, message })));
+
+function scrollToFirstError() {
+    const first = errorList.value[0];
+    if (!first) return;
+    const el = document.querySelector(`[data-field="${first.key}"]`) as HTMLElement | null;
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el?.focus({ preventScroll: true });
+}
+
 function saveSettings() {
     form.global_languages = JSON.stringify(globalLangs.value);
     form.global_keywords = JSON.stringify(globalKws.value);
     form.put('/settings', {
         preserveScroll: true,
         onSuccess: () => { if (form.theme !== currentTheme.value) setTheme(form.theme as any); },
+        onError: () => { scrollToFirstError(); },
     });
 }
 
@@ -274,13 +299,15 @@ onMounted(() => {
                     <div class="space-y-4">
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Client ID</label>
-                            <input v-model="form.twitch_client_id" type="text" placeholder="Your Twitch Client ID"
+                            <input v-model="form.twitch_client_id" :data-field="'twitch_client_id'" :aria-invalid="!!form.errors.twitch_client_id" type="text" placeholder="Your Twitch Client ID"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <p v-if="form.errors.twitch_client_id" class="text-[11px] text-red-600 dark:text-red-400 mt-1">{{ form.errors.twitch_client_id }}</p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Client Secret</label>
-                            <input v-model="form.twitch_client_secret" type="password" autocomplete="new-password" :placeholder="secretSet('twitch_client_secret') ? 'Leave empty to keep the stored secret' : 'Your Twitch Client Secret'"
+                            <input v-model="form.twitch_client_secret" :data-field="'twitch_client_secret'" :aria-invalid="!!form.errors.twitch_client_secret" type="password" autocomplete="new-password" :placeholder="secretSet('twitch_client_secret') ? 'Leave empty to keep the stored secret' : 'Your Twitch Client Secret'"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <p v-if="form.errors.twitch_client_secret" class="text-[11px] text-red-600 dark:text-red-400 mt-1">{{ form.errors.twitch_client_secret }}</p>
                             <p v-if="secretSet('twitch_client_secret')" class="text-[11px] text-gray-400 dark:text-zinc-600 mt-1">Stored: <span class="font-mono">{{ secretMask('twitch_client_secret') }}</span> · leave empty to keep · <button type="button" @click="clearSecret('twitch_client_secret')" class="text-red-500 hover:underline">remove</button></p>
                             <p v-else-if="form.clear_secrets.includes('twitch_client_secret')" class="text-[11px] text-amber-600 dark:text-amber-400 mt-1">Will be removed on save · <button type="button" @click="undoClear('twitch_client_secret')" class="hover:underline">undo</button></p>
                         </div>
@@ -312,10 +339,11 @@ onMounted(() => {
                             <label class="text-xs font-medium text-gray-600 dark:text-zinc-400">Scan Frequency</label>
                             <span class="text-sm font-semibold text-purple-600 dark:text-purple-400">{{ form.sync_frequency_minutes }} min</span>
                         </div>
-                        <input v-model="form.sync_frequency_minutes" type="range" min="1" max="60" step="1"
+                        <input v-model="form.sync_frequency_minutes" :data-field="'sync_frequency_minutes'" :aria-invalid="!!form.errors.sync_frequency_minutes" type="range" min="1" max="60" step="1"
                             class="w-full h-2 rounded-full appearance-none cursor-pointer bg-gray-200 dark:bg-zinc-700 accent-purple-600
                             [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-600 [&::-webkit-slider-thumb]:shadow-md [&::-webkit-slider-thumb]:hover:bg-purple-500 [&::-webkit-slider-thumb]:transition-colors
                             [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-purple-600 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:shadow-md" />
+                        <p v-if="form.errors.sync_frequency_minutes" class="text-[11px] text-red-600 dark:text-red-400 mt-1">{{ form.errors.sync_frequency_minutes }}</p>
                         <div class="flex justify-between mt-1 text-[10px] text-gray-400 dark:text-zinc-600">
                             <span>1 min</span>
                             <span>15</span>
@@ -357,13 +385,15 @@ onMounted(() => {
                         <div class="grid grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Minimum Viewers</label>
-                                <input v-model="form.global_min_viewers" type="number" min="0"
+                                <input v-model="form.global_min_viewers" :data-field="'global_min_viewers'" :aria-invalid="!!form.errors.global_min_viewers" type="number" min="0"
                                     class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                                <p v-if="form.errors.global_min_viewers" class="text-[11px] text-red-600 dark:text-red-400 mt-1">{{ form.errors.global_min_viewers }}</p>
                             </div>
                             <div>
                                 <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Min Avg Viewers <span class="font-normal text-gray-400 dark:text-zinc-600">TwitchTracker</span></label>
-                                <input v-model="form.global_min_avg_viewers" type="number" min="0"
+                                <input v-model="form.global_min_avg_viewers" :data-field="'global_min_avg_viewers'" :aria-invalid="!!form.errors.global_min_avg_viewers" type="number" min="0"
                                     class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                                <p v-if="form.errors.global_min_avg_viewers" class="text-[11px] text-red-600 dark:text-red-400 mt-1">{{ form.errors.global_min_avg_viewers }}</p>
                             </div>
                         </div>
                         <div>
@@ -409,8 +439,9 @@ onMounted(() => {
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Recipient Email</label>
-                        <input v-model="form.mail_to" type="email" placeholder="you@example.com"
+                        <input v-model="form.mail_to" :data-field="'mail_to'" :aria-invalid="!!form.errors.mail_to" type="email" placeholder="you@example.com"
                             class="w-full sm:w-1/2 px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                        <p v-if="form.errors.mail_to" class="text-[11px] text-red-600 dark:text-red-400 mt-1">{{ form.errors.mail_to }}</p>
                         <p class="text-[11px] text-gray-400 dark:text-zinc-600 mt-1">Where your alert e-mails are sent.</p>
                         <p v-if="!emailAvailable" class="text-[11px] text-amber-600 dark:text-amber-400 mt-1">
                             {{ isAdmin ? 'No SMTP server is set yet, so no e-mail can be sent.' : 'E-mail delivery is not set up on this server yet. Ask an administrator.' }}
@@ -423,13 +454,15 @@ onMounted(() => {
                     <div v-if="isAdmin" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">SMTP Host</label>
-                            <input v-model="form.smtp_host" type="text" placeholder="smtp.example.com"
+                            <input v-model="form.smtp_host" :data-field="'smtp_host'" :aria-invalid="!!form.errors.smtp_host" type="text" placeholder="smtp.example.com"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <p v-if="form.errors.smtp_host" class="text-[11px] text-red-600 dark:text-red-400 mt-1">{{ form.errors.smtp_host }}</p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">SMTP Port</label>
-                            <input v-model="form.smtp_port" type="text" placeholder="587"
+                            <input v-model="form.smtp_port" :data-field="'smtp_port'" :aria-invalid="!!form.errors.smtp_port" type="text" placeholder="587"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <p v-if="form.errors.smtp_port" class="text-[11px] text-red-600 dark:text-red-400 mt-1">{{ form.errors.smtp_port }}</p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Encryption</label>
@@ -439,28 +472,33 @@ onMounted(() => {
                                 <option value="ssl">SSL</option>
                                 <option value="">None</option>
                             </select>
+                            <p v-if="form.errors.smtp_encryption" class="text-[11px] text-red-600 dark:text-red-400 mt-1">{{ form.errors.smtp_encryption }}</p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">SMTP Username</label>
-                            <input v-model="form.smtp_username" type="text"
+                            <input v-model="form.smtp_username" :data-field="'smtp_username'" :aria-invalid="!!form.errors.smtp_username" type="text"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <p v-if="form.errors.smtp_username" class="text-[11px] text-red-600 dark:text-red-400 mt-1">{{ form.errors.smtp_username }}</p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">SMTP Password</label>
-                            <input v-model="form.smtp_password" type="password" autocomplete="new-password" :placeholder="secretSet('smtp_password') ? 'Leave empty to keep the stored password' : ''"
+                            <input v-model="form.smtp_password" :data-field="'smtp_password'" :aria-invalid="!!form.errors.smtp_password" type="password" autocomplete="new-password" :placeholder="secretSet('smtp_password') ? 'Leave empty to keep the stored password' : ''"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <p v-if="form.errors.smtp_password" class="text-[11px] text-red-600 dark:text-red-400 mt-1">{{ form.errors.smtp_password }}</p>
                             <p v-if="secretSet('smtp_password')" class="text-[11px] text-gray-400 dark:text-zinc-600 mt-1">Stored: <span class="font-mono">{{ secretMask('smtp_password') }}</span> · leave empty to keep · <button type="button" @click="clearSecret('smtp_password')" class="text-red-500 hover:underline">remove</button></p>
                             <p v-else-if="form.clear_secrets.includes('smtp_password')" class="text-[11px] text-amber-600 dark:text-amber-400 mt-1">Will be removed on save · <button type="button" @click="undoClear('smtp_password')" class="hover:underline">undo</button></p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">From Address</label>
-                            <input v-model="form.mail_from_address" type="email" placeholder="noreply@example.com"
+                            <input v-model="form.mail_from_address" :data-field="'mail_from_address'" :aria-invalid="!!form.errors.mail_from_address" type="email" placeholder="noreply@example.com"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <p v-if="form.errors.mail_from_address" class="text-[11px] text-red-600 dark:text-red-400 mt-1">{{ form.errors.mail_from_address }}</p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">From Name</label>
-                            <input v-model="form.mail_from_name" type="text" placeholder="StreamRadar"
+                            <input v-model="form.mail_from_name" :data-field="'mail_from_name'" :aria-invalid="!!form.errors.mail_from_name" type="text" placeholder="StreamRadar"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <p v-if="form.errors.mail_from_name" class="text-[11px] text-red-600 dark:text-red-400 mt-1">{{ form.errors.mail_from_name }}</p>
                         </div>
                     </div>
                     <div class="flex items-center gap-3 mt-4">
@@ -488,8 +526,9 @@ onMounted(() => {
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Webhook URL</label>
-                        <input v-model="form.discord_webhook_url" autocomplete="off" type="text" :placeholder="secretSet('discord_webhook_url') ? 'Leave empty to keep the stored URL' : 'https://discord.com/api/webhooks/...'"
+                        <input v-model="form.discord_webhook_url" :data-field="'discord_webhook_url'" :aria-invalid="!!form.errors.discord_webhook_url" autocomplete="off" type="text" :placeholder="secretSet('discord_webhook_url') ? 'Leave empty to keep the stored URL' : 'https://discord.com/api/webhooks/...'"
                             class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                        <p v-if="form.errors.discord_webhook_url" class="text-[11px] text-red-600 dark:text-red-400 mt-1">{{ form.errors.discord_webhook_url }}</p>
                         <p v-if="secretSet('discord_webhook_url')" class="text-[11px] text-gray-400 dark:text-zinc-600 mt-1">Stored: <span class="font-mono">{{ secretMask('discord_webhook_url') }}</span> · leave empty to keep · <button type="button" @click="clearSecret('discord_webhook_url')" class="text-red-500 hover:underline">remove</button></p>
                         <p v-else-if="form.clear_secrets.includes('discord_webhook_url')" class="text-[11px] text-amber-600 dark:text-amber-400 mt-1">Will be removed on save · <button type="button" @click="undoClear('discord_webhook_url')" class="hover:underline">undo</button></p>
                         <p class="mt-2 text-xs text-gray-400 dark:text-zinc-500">
@@ -522,15 +561,17 @@ onMounted(() => {
                     <div class="space-y-4">
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Bot Token</label>
-                            <input v-model="form.telegram_bot_token" type="password" autocomplete="new-password" :placeholder="secretSet('telegram_bot_token') ? 'Leave empty to keep the stored token' : 'Paste token from @BotFather'"
+                            <input v-model="form.telegram_bot_token" :data-field="'telegram_bot_token'" :aria-invalid="!!form.errors.telegram_bot_token" type="password" autocomplete="new-password" :placeholder="secretSet('telegram_bot_token') ? 'Leave empty to keep the stored token' : 'Paste token from @BotFather'"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <p v-if="form.errors.telegram_bot_token" class="text-[11px] text-red-600 dark:text-red-400 mt-1">{{ form.errors.telegram_bot_token }}</p>
                             <p v-if="secretSet('telegram_bot_token')" class="text-[11px] text-gray-400 dark:text-zinc-600 mt-1">Stored: <span class="font-mono">{{ secretMask('telegram_bot_token') }}</span> · leave empty to keep · <button type="button" @click="clearSecret('telegram_bot_token')" class="text-red-500 hover:underline">remove</button></p>
                             <p v-else-if="form.clear_secrets.includes('telegram_bot_token')" class="text-[11px] text-amber-600 dark:text-amber-400 mt-1">Will be removed on save · <button type="button" @click="undoClear('telegram_bot_token')" class="hover:underline">undo</button></p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Chat ID</label>
-                            <input v-model="form.telegram_chat_id" autocomplete="off" type="text" placeholder="Your numeric chat ID"
+                            <input v-model="form.telegram_chat_id" :data-field="'telegram_chat_id'" :aria-invalid="!!form.errors.telegram_chat_id" autocomplete="off" type="text" placeholder="Your numeric chat ID"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <p v-if="form.errors.telegram_chat_id" class="text-[11px] text-red-600 dark:text-red-400 mt-1">{{ form.errors.telegram_chat_id }}</p>
                         </div>
                         <p class="text-xs text-gray-400 dark:text-zinc-500">
                             Create a bot via <strong>@BotFather</strong> on Telegram, then send /start to your bot and enter the chat ID here.
@@ -561,8 +602,9 @@ onMounted(() => {
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Webhook URL</label>
-                        <input v-model="form.webhook_url" autocomplete="off" type="text" :placeholder="secretSet('webhook_url') ? 'Leave empty to keep the stored URL' : 'https://ntfy.sh/your-topic or any public URL...'"
+                        <input v-model="form.webhook_url" :data-field="'webhook_url'" :aria-invalid="!!form.errors.webhook_url" autocomplete="off" type="text" :placeholder="secretSet('webhook_url') ? 'Leave empty to keep the stored URL' : 'https://ntfy.sh/your-topic or any public URL...'"
                             class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                        <p v-if="form.errors.webhook_url" class="text-[11px] text-red-600 dark:text-red-400 mt-1">{{ form.errors.webhook_url }}</p>
                         <p v-if="secretSet('webhook_url')" class="text-[11px] text-gray-400 dark:text-zinc-600 mt-1">Stored: <span class="font-mono">{{ secretMask('webhook_url') }}</span> · leave empty to keep · <button type="button" @click="clearSecret('webhook_url')" class="text-red-500 hover:underline">remove</button></p>
                         <p v-else-if="form.clear_secrets.includes('webhook_url')" class="text-[11px] text-amber-600 dark:text-amber-400 mt-1">Will be removed on save · <button type="button" @click="undoClear('webhook_url')" class="hover:underline">undo</button></p>
                         <p class="mt-2 text-xs text-gray-400 dark:text-zinc-500">
@@ -576,6 +618,7 @@ onMounted(() => {
                             <option value="json">JSON (Zapier, Make, custom endpoints)</option>
                             <option value="ntfy">ntfy (plain text with title, click action and image)</option>
                         </select>
+                        <p v-if="form.errors.webhook_format" class="text-[11px] text-red-600 dark:text-red-400 mt-1">{{ form.errors.webhook_format }}</p>
                     </div>
                     <div class="flex items-center gap-3 mt-4">
                         <button @click="testNotification('webhook')" :disabled="testingWebhook"
@@ -648,7 +691,7 @@ onMounted(() => {
                 </div>
 
                 <!-- Spacer for sticky bar -->
-                <div v-if="isFormDirty" class="h-20"></div>
+                <div v-if="isFormDirty || errorList.length" :class="errorList.length ? 'h-40' : 'h-20'"></div>
             </div>
         </div>
 
@@ -661,8 +704,14 @@ onMounted(() => {
             leave-from-class="translate-y-0 opacity-100"
             leave-to-class="translate-y-full opacity-0"
         >
-            <div v-if="isFormDirty" class="fixed bottom-0 left-0 right-0 z-30 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md py-3 px-4">
-                <div class="max-w-7xl mx-auto flex justify-end">
+            <div v-if="isFormDirty || errorList.length" class="fixed bottom-0 left-0 right-0 z-30 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md py-3 px-4" style="padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px))">
+                <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-end gap-3">
+                    <div v-if="errorList.length" role="alert" class="flex-1 min-w-0 text-sm text-red-600 dark:text-red-400">
+                        <button type="button" @click="scrollToFirstError" class="font-medium hover:underline">Not saved: {{ errorList.length === 1 ? 'one field needs attention' : `${errorList.length} fields need attention` }}</button>
+                        <ul class="text-xs mt-0.5">
+                            <li v-for="e in errorList" :key="e.key" class="truncate"><span class="font-medium">{{ e.label }}:</span> {{ e.message }}</li>
+                        </ul>
+                    </div>
                     <button @click="saveSettings" :disabled="form.processing"
                         class="px-6 py-2.5 text-sm font-medium bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors shadow-lg">
                         {{ form.processing ? 'Saving...' : 'Save Settings' }}

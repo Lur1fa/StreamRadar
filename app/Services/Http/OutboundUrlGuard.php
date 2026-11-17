@@ -129,7 +129,7 @@ class OutboundUrlGuard
             $ips = [$host];
         } else {
             if (! $exempt && $this->isForbiddenHostname($host)) {
-                throw new UnsafeUrlException('Internal or reserved hostnames are not allowed.');
+                throw new UnsafeUrlException('Internal or reserved hostnames are not allowed.', allowable: true);
             }
             if (! filter_var($host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)) {
                 throw new UnsafeUrlException('The hostname is invalid.');
@@ -143,7 +143,7 @@ class OutboundUrlGuard
         if (! $exempt) {
             foreach ($ips as $ip) {
                 if (! self::isPublicIp($ip)) {
-                    throw new UnsafeUrlException('The URL resolves to a private, loopback or reserved address.');
+                    throw new UnsafeUrlException('The URL resolves to a private, loopback or reserved address.', allowable: true);
                 }
             }
         }

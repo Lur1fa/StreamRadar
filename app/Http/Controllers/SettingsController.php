@@ -129,7 +129,7 @@ class SettingsController extends Controller
             // Categories by Twitch id: database ids mean nothing in another installation.
             'alerts' => AlertRule::ownedBy($user)->get()->map(fn (AlertRule $rule) => [
                 ...$rule->only(AlertRule::exportColumns()),
-                'category_twitch_id' => $twitchIds[$rule->category_id] ?? null,
+                'category_twitch_id' => $rule->category_id === null ? null : ($twitchIds[$rule->category_id] ?? null),
                 'category_twitch_ids' => array_values(array_filter(array_map(fn ($id) => $twitchIds[$id] ?? null, $rule->category_ids ?? []))),
             ])->toArray(),
         ]);

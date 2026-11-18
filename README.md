@@ -34,35 +34,18 @@ https://github.com/user-attachments/assets/fc9bbc7b-7b03-4267-8387-af9e16e64329
 
 ## Installation
 
-### Quick install (recommended)
-
-You only need [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed. The install script does everything else.
-
-**Windows** — open PowerShell or Command Prompt and paste:
-```
-curl -fsSL https://raw.githubusercontent.com/stmn/StreamRadar/main/install.bat -o install.bat && install.bat
-```
-
-Or [download install.bat](https://raw.githubusercontent.com/stmn/StreamRadar/main/install.bat) and double-click it.
-
-**Mac / Linux** — open Terminal and paste:
-```bash
-curl -fsSL https://raw.githubusercontent.com/stmn/StreamRadar/main/install.sh | bash
-```
-
-That's it. Open **http://localhost:8080** in your browser.
-
-### Manual Docker install
-
-If you prefer to do it yourself:
+StreamRadar runs from a published Docker image.
 
 ```bash
-git clone https://github.com/stmn/StreamRadar.git
-cd streamradar
+mkdir streamradar && cd streamradar
+curl -fsSL https://raw.githubusercontent.com/Lur1fa/StreamRadar/main/docker-compose.yml -o docker-compose.yml
+echo "APP_KEY=base64:$(openssl rand -base64 32)" >> .env
 docker compose up -d
 ```
 
-Everything is automatic — database, encryption keys, and migrations are set up on first launch.
+Open **http://localhost:8080** in your browser. The database and migrations are set up on first start; your data lives in `./database`.
+
+**`APP_KEY` is required.** It encrypts the stored secrets (Twitch client secret, SMTP password, alert destination credentials). Back it up together with `./database`: a different key makes those secrets unreadable. StreamRadar refuses to start without it.
 
 **Create the first administrator.** StreamRadar requires a login and ships with no default account. On first start it prints a one-time setup token to the container log:
 
@@ -74,7 +57,7 @@ docker compose exec streamradar php artisan auth:setup-token
 
 Open the app, go to the setup page, and paste the token to create your admin account. Prefer the command line? Run `docker compose exec streamradar php artisan user:create --admin`.
 
-**Access from other devices.** By default the container is published on `127.0.0.1` only. To expose it on your LAN set `APP_BIND=0.0.0.0` in `.env` (ideally behind a TLS reverse proxy).
+**Access from other devices.** By default the container is published on `127.0.0.1` only. To expose it on your LAN set `APP_BIND=0.0.0.0` in `.env`.
 
 **Behind a TLS reverse proxy** set both of these in `.env`, then run `docker compose up -d`:
 
@@ -84,49 +67,6 @@ TRUSTED_PROXIES=172.16.0.0/12
 ```
 
 With an `https://` `APP_URL`, every link and redirect (including the SSO callback address) is built from that URL and the session cookie is marked `Secure`, so the app is only usable through that address, not by IP over plain HTTP. `TRUSTED_PROXIES` (IPs or CIDR ranges of your proxy) lets the app see the real client IP for login throttling and logs.
-
-**Change the port** (e.g. to 3000): add `APP_PORT=3000` to `.env` file, then run `docker compose up -d`
-
-**Stop:** `docker compose stop`
-
-**Update:** `git pull && docker compose up -d --build`
-
----
-
-### Option 2: Manual installation
-
-Requirements: PHP 8.3+, Composer, Node.js 20+, npm
-
-```bash
-git clone https://github.com/stmn/StreamRadar.git
-cd streamradar
-
-# Install dependencies
-composer install
-npm install
-
-# Build the frontend
-npm run build
-
-# Set up the app
-cp .env.example .env
-php artisan key:generate
-php artisan app:setup          # migrations, defaults, and prints a setup token
-
-# Create the first administrator (either option works)
-php artisan user:create --admin
-#   …or use the setup token printed by app:setup on the /setup page
-
-# Start the server
-php artisan serve
-```
-
-Open **http://localhost:8000** in your browser and sign in.
-
-For automatic syncing, run this in a separate terminal:
-```bash
-php artisan schedule:work
-```
 
 ---
 
@@ -194,12 +134,7 @@ Credentials never go in a URL: use the access token or username/password fields 
 
 StreamRadar automatically refreshes stream data. The sync frequency is configurable in **Settings** (default: every 5 minutes).
 
-**Docker:** Automatic syncing is built-in, no extra setup needed.
-
-**Manual installation:** Keep `php artisan schedule:work` running in a separate terminal, or add a cron job:
-```
-* * * * * cd /path/to/streamradar && php artisan schedule:run >> /dev/null 2>&1
-```
+Syncing runs inside the container; there is nothing to set up.
 
 You can also manually sync anytime by clicking the **Sync** button in the top bar.
 
@@ -250,55 +185,11 @@ The redirect URI is `https://your-host/auth/oidc/callback`. SSO is additive: loc
 
 **Lockout protection.** Failed logins are rate-limited per account (progressive lockout) and per IP. Passwords are bcrypt-hashed with a configurable minimum length (`AUTH_PASSWORD_MIN_LENGTH`, default 12).
 
-**Secrets.** API secrets, SMTP passwords and every destination's credentials (tokens, passwords, webhook URLs, header and query values) are encrypted at rest, never sent to the browser (only a mask is shown), and never included in exports.
+**Secrets.** API secrets, SMTP passwords and every destination's credentials (tokens, passwords, webhook URLs, header and query values) are encrypted at rest, never sent to the browser (only a mask is shown) and never included in exports.
 
 **Outbound webhooks.** ntfy, webhook and Discord URLs are validated against SSRF: they must resolve to public addresses, with no redirects and a response-size cap. To target a self-hosted endpoint on your LAN (e.g. ntfy), allow its exact hostname via `WEBHOOK_ALLOWED_HOSTS=ntfy.home.lan`.
 
 **Production hardening.** Keep `APP_ENV=production` and `APP_DEBUG=false` (the app forces both off if misconfigured). Developer tooling (Inertia DevTools) is disabled unless explicitly enabled and is never active in production; its endpoints additionally require an admin session.
-
----
-
-## Running 24/7
-
-To keep StreamRadar running continuously (including after system restarts):
-
-**Docker (recommended):** The `docker-compose.yml` already includes `restart: unless-stopped`, so the container will automatically restart after a system reboot — as long as Docker itself starts on boot.
-
-- **Windows:** Docker Desktop starts with Windows by default. Check Docker Desktop → Settings → General → "Start Docker Desktop when you sign in".
-- **Mac:** Docker Desktop starts automatically. Check Docker Desktop → Settings → General → "Start Docker Desktop when you log in".
-- **Linux:** Enable the Docker service:
-  ```bash
-  sudo systemctl enable docker
-  ```
-
-**Manual installation (without Docker):** Use a process manager or system service:
-
-- **Linux (systemd):**
-  ```bash
-  # Create /etc/systemd/system/streamradar.service
-  [Unit]
-  Description=StreamRadar
-  After=network.target
-
-  [Service]
-  Type=simple
-  User=www-data
-  WorkingDirectory=/path/to/streamradar
-  ExecStart=/usr/bin/php artisan serve --host=0.0.0.0 --port=8080
-  Restart=always
-
-  [Install]
-  WantedBy=multi-user.target
-  ```
-  Then: `sudo systemctl enable --now streamradar`
-
-- **Mac (launchd):** Use `launchctl` or a tool like [pm2](https://pm2.keymetrics.io/):
-  ```bash
-  npm install -g pm2
-  pm2 start "php artisan serve --port=8080" --name streamradar
-  pm2 startup   # generates auto-start config
-  pm2 save
-  ```
 
 ---
 
@@ -311,10 +202,11 @@ To keep StreamRadar running continuously (including after system restarts):
 
 ## Commands
 
+Run them inside the container: `docker compose exec streamradar php artisan <command>`.
+
 | Command | Description |
 |---------|-------------|
 | `php artisan streams:sync` | Manually sync all streams |
-| `php artisan app:setup` | Initial setup (migrations + defaults) |
 | `php artisan auth:setup-token` | Print a one-time token to create the first admin on `/setup` |
 | `php artisan user:create --admin` | Create a user account (admin or user) |
 | `php artisan user:password <email>` | Reset an account's password (recovery) |
@@ -322,7 +214,6 @@ To keep StreamRadar running continuously (including after system restarts):
 | `php artisan user:list` | List accounts |
 | `php artisan user:move-data <from> <to>` | Move one account's tracking, alerts, blacklist, history and alert destinations to another account |
 | `php artisan user:delete <email>` | Delete an account |
-| `php artisan schedule:work` | Start the scheduler (auto-sync) |
 
 ## License
 

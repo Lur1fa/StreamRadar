@@ -23,15 +23,13 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
-use Throwable;
 
 /**
  * The Settings page serves two audiences. Every account reads and writes its
  * own settings (default filters, appearance) and manages where its alerts go
  * (NotificationDestinationController). The installation's settings (Twitch
- * API keys, scanning, SMTP server), the Twitch test, the update check and
- * the backup are administrator-only (see routes/web.php and
- * UpdateSettingsRequest).
+ * API keys, scanning, SMTP server), the Twitch test and the backup are
+ * administrator-only (see routes/web.php and UpdateSettingsRequest).
  *
  * Secret handling: secrets never leave the server. The page receives only
  * `<key>_set` / `<key>_masked`; updates ignore empty or masked values; the
@@ -175,76 +173,5 @@ class SettingsController extends Controller
         }
 
         return response()->json($result);
-    }
-
-    public function checkUpdate(): JsonResponse
-    {
-        try {
-            $buildHash = $this->readFirstLine(base_path('VERSION'));
-
-            if (! $buildHash || $buildHash === 'unknown') {
-                return response()->json(['update_available' => false]);
-            }
-
-            $latestHash = $this->resolveGitHead();
-
-            if (! $latestHash) {
-                return response()->json(['update_available' => false]);
-            }
-
-            $updateAvailable = $buildHash !== $latestHash;
-
-            return response()->json([
-                'update_available' => $updateAvailable,
-                'local_version' => substr($buildHash, 0, 7),
-                'remote_version' => $updateAvailable ? substr($latestHash, 0, 7) : null,
-            ]);
-        } catch (Throwable) {
-            return response()->json(['update_available' => false]);
-        }
-    }
-
-    /**
-     * Resolve the checked-out commit from the mounted git metadata without
-     * spawning a shell. Docker mounts .git-head / .git-refs; a source checkout
-     * has .git/HEAD directly.
-     */
-    private function resolveGitHead(): ?string
-    {
-        foreach ([[base_path('.git-head'), base_path('.git-refs')], [base_path('.git/HEAD'), base_path('.git/refs')]] as [$headFile, $refsDir]) {
-            if (! is_file($headFile)) {
-                continue;
-            }
-
-            $ref = $this->readFirstLine($headFile);
-            if ($ref === null) {
-                return null;
-            }
-
-            if (str_starts_with($ref, 'ref: ')) {
-                $relative = substr($ref, 5);
-                $relative = str_starts_with($relative, 'refs/') ? substr($relative, 5) : $relative;
-                if (! preg_match('#^[A-Za-z0-9._/\-]+$#', $relative) || str_contains($relative, '..')) {
-                    return null;
-                }
-                $hash = $this->readFirstLine($refsDir.'/'.$relative);
-
-                return $hash && preg_match('/^[0-9a-f]{40}$/', $hash) ? $hash : null;
-            }
-
-            return preg_match('/^[0-9a-f]{40}$/', $ref) ? $ref : null;
-        }
-
-        return null;
-    }
-
-    private function readFirstLine(string $path): ?string
-    {
-        if (! is_file($path) || ! is_readable($path)) {
-            return null;
-        }
-        $line = trim((string) strtok((string) file_get_contents($path, false, null, 0, 512), "\n"));
-
-        return $line === '' ? null : $line;
     }
 }

@@ -26,17 +26,6 @@ RUN npm ci
 # Copy application code
 COPY . .
 
-# Save version from git
-RUN if [ -f .git/HEAD ]; then \
-        REF=$(cat .git/HEAD); \
-        if echo "$REF" | grep -q "^ref:"; then \
-            REF_PATH=$(echo "$REF" | sed 's/^ref: //'); \
-            cat ".git/$REF_PATH" > VERSION 2>/dev/null || echo "unknown" > VERSION; \
-        else \
-            echo "$REF" > VERSION; \
-        fi; \
-    else echo "unknown" > VERSION; fi
-
 # Complete composer autoload
 RUN composer dump-autoload --optimize
 

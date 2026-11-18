@@ -2,14 +2,15 @@
 
 namespace App\Console\Commands;
 
-use App\Models\User;
+use App\Console\Commands\Concerns\ManagesAccounts;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rules\Password;
 
 class UserPasswordCommand extends Command
 {
+    use ManagesAccounts;
+
     protected $signature = 'user:password
                             {email : E-mail of the account}
                             {--password= : New password (omit to be prompted securely)}
@@ -19,28 +20,18 @@ class UserPasswordCommand extends Command
 
     public function handle(): int
     {
-        $user = User::findByEmail($this->argument('email'));
+        $user = $this->accountOrFail((string) $this->argument('email'));
         if (! $user) {
-            $this->error('No account with that e-mail address.');
-
             return self::FAILURE;
         }
 
-        if ($this->option('password-stdin')) {
-            $password = rtrim((string) stream_get_contents(STDIN), "\r\n");
-        } elseif ($this->option('password') !== null) {
-            $password = (string) $this->option('password');
-        } else {
-            $password = (string) $this->secret('New password');
-            if (! hash_equals($password, (string) $this->secret('Confirm new password'))) {
-                $this->error('Passwords do not match.');
-
-                return self::FAILURE;
-            }
+        $password = $this->newPassword('New password', 'Confirm new password');
+        if ($password === null) {
+            return self::FAILURE;
         }
 
         $validator = Validator::make(['password' => $password], [
-            'password' => ['required', 'string', Password::min((int) config('security.password_min_length', 12))],
+            'password' => ['required', 'string', Password::defaults()],
         ]);
         if ($validator->fails()) {
             $this->error($validator->errors()->first());
@@ -49,7 +40,7 @@ class UserPasswordCommand extends Command
         }
 
         $user->forceFill(['password' => $password, 'disabled_at' => null])->save();
-        DB::table('sessions')->where('user_id', $user->id)->delete();
+        $user->endAllSessions();
 
         $this->info("Password updated for {$user->email}. All existing sessions were signed out.");
 

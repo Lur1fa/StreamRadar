@@ -1,22 +1,19 @@
 <script setup lang="ts">
-import { ref, reactive, computed, watch, onUnmounted } from 'vue';
+import { ref, reactive, computed } from 'vue';
 import { useForm, router } from '@inertiajs/vue3';
 import { Bell, Plus, Send, SquarePen, Trash2, X, WandSparkles, Loader2 } from 'lucide-vue-next';
 import ConfirmModal from '@/components/ConfirmModal.vue';
+import FieldError from '@/components/FieldError.vue';
 import { useAuth } from '@/composables/useAuth';
-import type { DestinationType, NotificationDestination } from '@/types';
+import { useDocumentKeydown } from '@/composables/useDocumentKeydown';
+import { formatDate, requestErrorMessage } from '@/utils';
+import type { DestinationType, DestinationTypeInfo, NotificationDestination } from '@/types';
 
-const props = defineProps<{ destinations: NotificationDestination[]; emailAvailable: boolean }>();
+/** `types` is the server's list of destination types (DestinationType::forBrowser()). */
+const props = defineProps<{ destinations: NotificationDestination[]; types: DestinationTypeInfo[]; emailAvailable: boolean }>();
 const { isAdmin } = useAuth();
 
-const TYPES: { value: DestinationType; label: string }[] = [
-    { value: 'ntfy', label: 'ntfy' },
-    { value: 'webhook', label: 'Webhook' },
-    { value: 'email', label: 'Email' },
-    { value: 'telegram', label: 'Telegram' },
-    { value: 'discord', label: 'Discord' },
-];
-const typeLabel = (type: string) => TYPES.find(t => t.value === type)?.label ?? type;
+const typeLabel = (type: string) => props.types.find(t => t.value === type)?.label ?? type;
 
 /** Field names as shown in the dialog, for "Saved secrets" and "Missing". */
 const LABELS: Record<string, string> = {
@@ -25,14 +22,10 @@ const LABELS: Record<string, string> = {
     to: 'To address(es)', subject_prefix: 'Subject prefix', bot_token: 'Bot token', chat_id: 'Chat ID', webhook_url: 'Webhook URL',
 };
 
+/** The plain settings a new destination of this type starts with. Webhook header and query names live in `form.rows`. */
 function defaultConfig(type: DestinationType): Record<string, string> {
-    switch (type) {
-        case 'ntfy': return { server_url: '', topic: '', username: '', title_prefix: '' };
-        case 'webhook': return { method: 'POST', auth: 'none', auth_username: '' };
-        case 'email': return { to: '', subject_prefix: '' };
-        case 'telegram': return { chat_id: '' };
-        default: return {};
-    }
+    const { headers, query, ...plain } = props.types.find(t => t.value === type)?.defaultConfig ?? {};
+    return plain;
 }
 
 // ── Dialog ──────────────────────────────────────────────────────────
@@ -159,12 +152,7 @@ const otherErrors = computed(() => Object.entries(errors.value)
     .filter(([key]) => !/^(name|type|config\.|secrets\.)/.test(key))
     .map(([, message]) => message));
 
-function onKeydown(e: KeyboardEvent) { if (e.key === 'Escape') close(); }
-watch(showDialog, (open) => {
-    if (open) document.addEventListener('keydown', onKeydown);
-    else document.removeEventListener('keydown', onKeydown);
-});
-onUnmounted(() => document.removeEventListener('keydown', onKeydown));
+useDocumentKeydown(showDialog, (e) => { if (e.key === 'Escape') close(); });
 
 // ── List actions ────────────────────────────────────────────────────
 const testing = ref<number | null>(null);
@@ -176,10 +164,10 @@ async function test(destination: NotificationDestination) {
     try {
         const { data } = await window.axios.post(`/settings/destinations/${destination.id}/test`);
         results[destination.id] = data;
-    } catch (e: any) {
+    } catch (e) {
         results[destination.id] = {
             success: false,
-            message: e.response?.status === 429 ? 'Too many tests. Wait a minute and try again.' : (e.response?.data?.message || 'Request failed.'),
+            message: requestErrorMessage(e, 'Request failed.', 'Too many tests. Wait a minute and try again.'),
         };
     } finally {
         testing.value = null;
@@ -203,13 +191,8 @@ function savedSecrets(d: NotificationDestination): string {
     return names.join(', ');
 }
 
-function formatDate(iso: string | null): string {
-    return iso ? new Date(iso).toLocaleString() : '';
-}
-
 const label = 'block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1';
 const input = 'w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500 aria-[invalid=true]:ring-2 aria-[invalid=true]:ring-red-400';
-const errorText = 'text-[11px] text-red-600 dark:text-red-400 mt-1';
 const hint = 'text-[11px] text-gray-400 dark:text-zinc-500 mt-1';
 const smallButton = 'px-2.5 py-1 text-xs font-medium rounded-md bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-zinc-300 hover:bg-gray-200 dark:hover:bg-zinc-700 transition-colors';
 </script>
@@ -297,14 +280,14 @@ const smallButton = 'px-2.5 py-1 text-xs font-medium rounded-md bg-gray-100 dark
                                             <WandSparkles class="w-4 h-4" />
                                         </button>
                                     </div>
-                                    <p v-if="err('name')" :class="errorText">{{ err('name') }}</p>
+                                    <FieldError :message="err('name')" />
                                 </div>
                                 <div>
                                     <label for="destination-type" :class="label">Type</label>
                                     <select id="destination-type" :value="form.type" @change="changeType(($event.target as HTMLSelectElement).value as DestinationType)" :class="input">
-                                        <option v-for="t in TYPES" :key="t.value" :value="t.value">{{ t.label }}</option>
+                                        <option v-for="t in types" :key="t.value" :value="t.value">{{ t.label }}</option>
                                     </select>
-                                    <p v-if="err('type')" :class="errorText">{{ err('type') }}</p>
+                                    <FieldError :message="err('type')" />
                                 </div>
                             </div>
 
@@ -323,34 +306,34 @@ const smallButton = 'px-2.5 py-1 text-xs font-medium rounded-md bg-gray-100 dark
                                         <div>
                                             <label :class="label">Server URL</label>
                                             <input v-model="form.config.server_url" type="url" autocomplete="off" placeholder="https://ntfy.sh" :aria-invalid="!!err('config.server_url')" :class="input" />
-                                            <p v-if="err('config.server_url')" :class="errorText">{{ err('config.server_url') }}</p>
+                                            <FieldError :message="err('config.server_url')" />
                                         </div>
                                         <div>
                                             <label :class="label">Topic</label>
                                             <input v-model="form.config.topic" type="text" autocomplete="off" placeholder="streamradar" :aria-invalid="!!err('config.topic')" :class="input" />
-                                            <p v-if="err('config.topic')" :class="errorText">{{ err('config.topic') }}</p>
+                                            <FieldError :message="err('config.topic')" />
                                         </div>
                                         <div>
                                             <label :class="label">Access Token</label>
                                             <input v-model="form.secrets.access_token" type="password" autocomplete="new-password" :placeholder="secretPlaceholder('access_token', 'tk_…')" :aria-invalid="!!err('secrets.access_token')" :class="input" />
-                                            <p v-if="err('secrets.access_token')" :class="errorText">{{ err('secrets.access_token') }}</p>
+                                            <FieldError :message="err('secrets.access_token')" />
                                             <p v-if="stored('access_token')" :class="hint"><button type="button" @click="removeSecret('access_token')" class="text-red-500 hover:underline">Remove token</button></p>
                                             <p v-else-if="removable('access_token')" class="text-[11px] text-amber-600 dark:text-amber-400 mt-1">Removed on save · <button type="button" @click="undoRemove('access_token')" class="hover:underline">undo</button></p>
                                         </div>
                                         <div>
                                             <label :class="label">Username</label>
                                             <input v-model="form.config.username" type="text" autocomplete="off" :aria-invalid="!!err('config.username')" :class="input" />
-                                            <p v-if="err('config.username')" :class="errorText">{{ err('config.username') }}</p>
+                                            <FieldError :message="err('config.username')" />
                                         </div>
                                         <div>
                                             <label :class="label">Password</label>
                                             <input v-model="form.secrets.password" type="password" autocomplete="new-password" :placeholder="secretPlaceholder('password')" :aria-invalid="!!err('secrets.password')" :class="input" />
-                                            <p v-if="err('secrets.password')" :class="errorText">{{ err('secrets.password') }}</p>
+                                            <FieldError :message="err('secrets.password')" />
                                         </div>
                                         <div>
                                             <label :class="label">Title Prefix</label>
                                             <input v-model="form.config.title_prefix" type="text" maxlength="64" placeholder="StreamRadar" :aria-invalid="!!err('config.title_prefix')" :class="input" />
-                                            <p v-if="err('config.title_prefix')" :class="errorText">{{ err('config.title_prefix') }}</p>
+                                            <FieldError :message="err('config.title_prefix')" />
                                         </div>
                                     </div>
                                     <p class="text-xs text-gray-400 dark:text-zinc-500">For a protected topic, use an access token (sent as an <code>Authorization: Bearer</code> header) or a username and password. The token wins if both are set.</p>
@@ -366,12 +349,12 @@ const smallButton = 'px-2.5 py-1 text-xs font-medium rounded-md bg-gray-100 dark
                                                 <option value="PUT">PUT</option>
                                                 <option value="PATCH">PATCH</option>
                                             </select>
-                                            <p v-if="err('config.method')" :class="errorText">{{ err('config.method') }}</p>
+                                            <FieldError :message="err('config.method')" />
                                         </div>
                                         <div>
                                             <label :class="label">URL</label>
                                             <input v-model="form.secrets.url" type="url" autocomplete="off" :placeholder="secretPlaceholder('url', 'https://example.com/hook')" :aria-invalid="!!err('secrets.url')" :class="input" />
-                                            <p v-if="err('secrets.url')" :class="errorText">{{ err('secrets.url') }}</p>
+                                            <FieldError :message="err('secrets.url')" />
                                         </div>
                                     </div>
 
@@ -393,8 +376,8 @@ const smallButton = 'px-2.5 py-1 text-xs font-medium rounded-md bg-gray-100 dark
                                                     <X class="w-4 h-4" />
                                                 </button>
                                             </div>
-                                            <p v-if="err(`config.${list}.${i}`)" :class="errorText">{{ err(`config.${list}.${i}`) }}</p>
-                                            <p v-if="err(`secrets.${list}.${i}`)" :class="errorText">{{ err(`secrets.${list}.${i}`) }}</p>
+                                            <FieldError :message="err(`config.${list}.${i}`)" />
+                                            <FieldError :message="err(`secrets.${list}.${i}`)" />
                                         </div>
                                         <p v-if="form.rows[list].length" :class="hint">Values are stored encrypted and not shown again.</p>
                                     </div>
@@ -413,18 +396,18 @@ const smallButton = 'px-2.5 py-1 text-xs font-medium rounded-md bg-gray-100 dark
                                         <div>
                                             <label :class="label">Username</label>
                                             <input v-model="form.config.auth_username" type="text" autocomplete="off" :aria-invalid="!!err('config.auth_username')" :class="input" />
-                                            <p v-if="err('config.auth_username')" :class="errorText">{{ err('config.auth_username') }}</p>
+                                            <FieldError :message="err('config.auth_username')" />
                                         </div>
                                         <div>
                                             <label :class="label">Password</label>
                                             <input v-model="form.secrets.auth_password" type="password" autocomplete="new-password" :placeholder="secretPlaceholder('auth_password')" :aria-invalid="!!err('secrets.auth_password')" :class="input" />
-                                            <p v-if="err('secrets.auth_password')" :class="errorText">{{ err('secrets.auth_password') }}</p>
+                                            <FieldError :message="err('secrets.auth_password')" />
                                         </div>
                                     </div>
                                     <div v-else-if="form.config.auth === 'bearer'">
                                         <label :class="label">Token</label>
                                         <input v-model="form.secrets.auth_token" type="password" autocomplete="new-password" :placeholder="secretPlaceholder('auth_token')" :aria-invalid="!!err('secrets.auth_token')" :class="input" />
-                                        <p v-if="err('secrets.auth_token')" :class="errorText">{{ err('secrets.auth_token') }}</p>
+                                        <FieldError :message="err('secrets.auth_token')" />
                                     </div>
                                     <p class="text-xs text-gray-400 dark:text-zinc-500">Each batch of alerts is sent as JSON: <code>{"event": "stream.alerts.batch", "count": …, "alerts": [...]}</code>.</p>
                                 </template>
@@ -435,13 +418,13 @@ const smallButton = 'px-2.5 py-1 text-xs font-medium rounded-md bg-gray-100 dark
                                         <div>
                                             <label :class="label">To Address(es)</label>
                                             <input v-model="form.config.to" type="text" autocomplete="off" placeholder="you@example.com" :aria-invalid="!!err('config.to')" :class="input" />
-                                            <p v-if="err('config.to')" :class="errorText">{{ err('config.to') }}</p>
+                                            <FieldError v-if="err('config.to')" :message="err('config.to')" />
                                             <p v-else :class="hint">Separate several addresses with commas.</p>
                                         </div>
                                         <div>
                                             <label :class="label">Subject Prefix</label>
                                             <input v-model="form.config.subject_prefix" type="text" maxlength="64" placeholder="[StreamRadar]" :aria-invalid="!!err('config.subject_prefix')" :class="input" />
-                                            <p v-if="err('config.subject_prefix')" :class="errorText">{{ err('config.subject_prefix') }}</p>
+                                            <FieldError :message="err('config.subject_prefix')" />
                                         </div>
                                     </div>
                                     <p v-if="!emailAvailable" class="text-xs text-amber-600 dark:text-amber-400">
@@ -456,12 +439,12 @@ const smallButton = 'px-2.5 py-1 text-xs font-medium rounded-md bg-gray-100 dark
                                         <div>
                                             <label :class="label">Bot Token</label>
                                             <input v-model="form.secrets.bot_token" type="password" autocomplete="new-password" :placeholder="secretPlaceholder('bot_token', 'From @BotFather')" :aria-invalid="!!err('secrets.bot_token')" :class="input" />
-                                            <p v-if="err('secrets.bot_token')" :class="errorText">{{ err('secrets.bot_token') }}</p>
+                                            <FieldError :message="err('secrets.bot_token')" />
                                         </div>
                                         <div>
                                             <label :class="label">Chat ID</label>
                                             <input v-model="form.config.chat_id" type="text" inputmode="numeric" autocomplete="off" placeholder="123456789" :aria-invalid="!!err('config.chat_id')" :class="input" />
-                                            <p v-if="err('config.chat_id')" :class="errorText">{{ err('config.chat_id') }}</p>
+                                            <FieldError :message="err('config.chat_id')" />
                                         </div>
                                     </div>
                                     <p class="text-xs text-gray-400 dark:text-zinc-500">Create a bot via <strong>@BotFather</strong>, send /start to it, then enter your numeric chat ID.</p>
@@ -472,13 +455,13 @@ const smallButton = 'px-2.5 py-1 text-xs font-medium rounded-md bg-gray-100 dark
                                     <div>
                                         <label :class="label">Webhook URL</label>
                                         <input v-model="form.secrets.webhook_url" type="url" autocomplete="off" :placeholder="secretPlaceholder('webhook_url', 'https://discord.com/api/webhooks/…')" :aria-invalid="!!err('secrets.webhook_url')" :class="input" />
-                                        <p v-if="err('secrets.webhook_url')" :class="errorText">{{ err('secrets.webhook_url') }}</p>
+                                        <FieldError :message="err('secrets.webhook_url')" />
                                     </div>
                                     <p class="text-xs text-gray-400 dark:text-zinc-500">In Discord: Server Settings &rarr; Integrations &rarr; Webhooks &rarr; New Webhook, then copy its URL.</p>
                                 </template>
                             </div>
 
-                            <p v-for="message in otherErrors" :key="message" :class="errorText">{{ message }}</p>
+                            <FieldError v-for="message in otherErrors" :key="message" :message="message" />
                         </div>
 
                         <div class="flex justify-end gap-2 px-6 py-4 border-t border-gray-100 dark:border-zinc-800">

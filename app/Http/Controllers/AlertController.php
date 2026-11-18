@@ -5,13 +5,13 @@ namespace App\Http\Controllers;
 use App\Models\AlertRule;
 use App\Models\Category;
 use App\Models\NotificationDestination;
-use App\Models\Setting;
 use App\Models\TrackedChannel;
 use App\Models\User;
 use App\Services\AlertService;
 use App\Services\AlertTemplateValidator;
+use App\Services\Mail\SmtpSettings;
 use App\Services\Notifications\DestinationType;
-use App\Services\TwitchApiService;
+use App\Services\TwitchUserLookup;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -36,7 +36,7 @@ class AlertController extends Controller
         $readyTypes = NotificationDestination::ownedBy($user)->where('enabled', true)->get()
             ->filter(fn (NotificationDestination $d) => $d->isComplete())
             ->map(fn (NotificationDestination $d) => $d->type)
-            ->reject(fn (DestinationType $type) => $type === DestinationType::Email && empty(Setting::get('smtp_host')))
+            ->reject(fn (DestinationType $type) => $type === DestinationType::Email && ! SmtpSettings::configured())
             ->map(fn (DestinationType $type) => $type->value)
             ->unique()->values();
 
@@ -44,70 +44,15 @@ class AlertController extends Controller
             'alertRules' => $alertRules,
             'categories' => $categories,
             'readyTypes' => $readyTypes,
+            'destinationTypes' => DestinationType::forBrowser(),
+            'templateFields' => AlertTemplateValidator::FIELD_LABELS,
         ]);
     }
 
-    /**
-     * A rule may only point at categories of the same account.
-     *
-     * @return array<string, mixed>
-     */
-    private function categoryRules(Request $request): array
+    public function store(Request $request, AlertService $alertService, TwitchUserLookup $lookup): RedirectResponse
     {
-        return [
-            'category_id' => ['nullable', Rule::exists('categories', 'id')->where('owner_id', $request->user()->id)],
-            'category_ids' => ['nullable', 'array'],
-            'category_ids.*' => ['integer'],
-        ];
-    }
-
-    /**
-     * Keep only ids of categories the account still has. Ids of categories
-     * removed since the rule was written are dropped instead of rejected, so
-     * an old rule stays editable.
-     *
-     * @param  array<string, mixed>  $validated
-     * @return array<string, mixed>
-     */
-    private function withOwnCategories(Request $request, array $validated): array
-    {
-        if (! empty($validated['category_ids'])) {
-            $own = Category::ownedBy($request->user())->whereIn('id', $validated['category_ids'])->pluck('id')->all();
-            $validated['category_ids'] = array_values(array_intersect(array_map('intval', $validated['category_ids']), $own));
-        }
-
-        return $validated;
-    }
-
-    public function store(Request $request, AlertService $alertService, TwitchApiService $twitch): RedirectResponse
-    {
-        $validated = $request->validate([
-            'name' => 'required|string|max:255',
-            'streamer_login' => 'nullable|string|max:255',
-            ...$this->categoryRules($request),
-            'category_tags' => 'nullable|array',
-            'min_viewers' => 'nullable|integer|min:0',
-            'min_avg_viewers' => 'nullable|integer|min:0',
-            'language' => 'nullable|string|max:10',
-            'keywords' => 'nullable|array',
-            'notify_email' => 'boolean',
-            'notify_discord' => 'boolean',
-            'notify_telegram' => 'boolean',
-            'notify_webhook' => 'boolean',
-            'notify_ntfy' => 'boolean',
-            'notify_on_category_change' => 'boolean',
-            'notify_on_stream_start' => 'boolean',
-            'notification_template' => 'nullable|array',
-        ]);
-
-        $validated = $this->withOwnCategories($request, $validated);
+        $validated = $this->prepare($request, $request->validate($this->rules($request, creating: true)), $lookup);
         $validated['match_mode'] = 'always';
-        $validated['notification_template'] = app(AlertTemplateValidator::class)->validate($validated['notification_template'] ?? null);
-
-        if (! empty($validated['streamer_login'])) {
-            $validated['streamer_login'] = strtolower($validated['streamer_login']);
-            $this->ensureChannelTracked($request->user(), $validated['streamer_login'], $twitch);
-        }
 
         $rule = AlertRule::createFor($request->user(), $validated);
 
@@ -117,74 +62,11 @@ class AlertController extends Controller
         return back()->with('success', 'Alert rule created.');
     }
 
-    public function update(Request $request, AlertRule $alert): RedirectResponse
+    public function update(Request $request, AlertRule $alert, TwitchUserLookup $lookup): RedirectResponse
     {
-        $validated = $request->validate([
-            'name' => 'sometimes|string|max:255',
-            'is_active' => 'sometimes|boolean',
-            'streamer_login' => 'nullable|string|max:255',
-            ...$this->categoryRules($request),
-            'category_tags' => 'nullable|array',
-            'min_viewers' => 'nullable|integer|min:0',
-            'min_avg_viewers' => 'nullable|integer|min:0',
-            'language' => 'nullable|string|max:10',
-            'keywords' => 'nullable|array',
-            'notify_email' => 'sometimes|boolean',
-            'notify_discord' => 'sometimes|boolean',
-            'notify_telegram' => 'sometimes|boolean',
-            'notify_webhook' => 'sometimes|boolean',
-            'notify_ntfy' => 'sometimes|boolean',
-            'notify_on_category_change' => 'sometimes|boolean',
-            'notification_template' => 'sometimes|nullable|array',
-        ]);
-
-        if (! empty($validated['streamer_login'])) {
-            $validated['streamer_login'] = strtolower($validated['streamer_login']);
-            $this->ensureChannelTracked($request->user(), $validated['streamer_login'], app(TwitchApiService::class));
-        }
-
-        if (array_key_exists('notification_template', $validated)) {
-            $validated['notification_template'] = app(AlertTemplateValidator::class)->validate($validated['notification_template']);
-        }
-
-        $alert->update($this->withOwnCategories($request, $validated));
+        $alert->update($this->prepare($request, $request->validate($this->rules($request, creating: false)), $lookup));
 
         return back()->with('success', 'Alert rule updated.');
-    }
-
-    private function ensureChannelTracked(User $owner, string $login, TwitchApiService $twitch): void
-    {
-        if (TrackedChannel::ownedBy($owner)->where('user_login', $login)->exists()) {
-            return;
-        }
-
-        $userId = $login;
-        $userName = $login;
-        $avatar = null;
-
-        if ($twitch->isConfigured()) {
-            try {
-                $users = $twitch->getUsers([$login]);
-                if (! empty($users)) {
-                    $userId = $users[0]['id'];
-                    $userName = $users[0]['display_name'] ?? $login;
-                    $avatar = $users[0]['profile_image_url'] ?? null;
-                }
-            } catch (\Exception $e) {
-                // Continue with what we have
-            }
-        }
-
-        if (TrackedChannel::ownedBy($owner)->where('twitch_user_id', $userId)->exists()) {
-            return;
-        }
-
-        TrackedChannel::createFor($owner, [
-            'twitch_user_id' => $userId,
-            'user_login' => $login,
-            'user_name' => $userName,
-            'profile_image_url' => $avatar,
-        ]);
     }
 
     public function destroy(AlertRule $alert): RedirectResponse
@@ -193,5 +75,82 @@ class AlertController extends Controller
         $alert->delete();
 
         return back()->with('success', 'Alert rule deleted.');
+    }
+
+    /**
+     * One set of rules for creating and editing; when editing, a field that
+     * is not sent stays as it is. A rule may only point at categories of the
+     * same account.
+     *
+     * @return array<string, mixed>
+     */
+    private function rules(Request $request, bool $creating): array
+    {
+        $optional = $creating ? [] : ['sometimes'];
+
+        return [
+            'name' => [$creating ? 'required' : 'sometimes', 'string', 'max:255'],
+            'is_active' => ['sometimes', 'boolean'],
+            'streamer_login' => ['nullable', 'string', 'max:255'],
+            'category_id' => ['nullable', Rule::exists('categories', 'id')->where('owner_id', $request->user()->id)],
+            'category_ids' => ['nullable', 'array'],
+            'category_ids.*' => ['integer'],
+            'category_tags' => ['nullable', 'array'],
+            'min_viewers' => ['nullable', 'integer', 'min:0'],
+            'min_avg_viewers' => ['nullable', 'integer', 'min:0'],
+            'language' => ['nullable', 'string', 'max:10'],
+            'keywords' => ['nullable', 'array'],
+            ...array_fill_keys([...DestinationType::ruleFlags(), 'notify_on_category_change', 'notify_on_stream_start'], [...$optional, 'boolean']),
+            'notification_template' => [...$optional, 'nullable', 'array'],
+        ];
+    }
+
+    /**
+     * Validated input as stored: own categories only, the streamer login
+     * lower-cased and tracked, the template checked.
+     *
+     * @param  array<string, mixed>  $validated
+     * @return array<string, mixed>
+     */
+    private function prepare(Request $request, array $validated, TwitchUserLookup $lookup): array
+    {
+        // Ids of categories removed since the rule was written are dropped
+        // instead of rejected, so an old rule stays editable.
+        if (! empty($validated['category_ids'])) {
+            $own = Category::ownedBy($request->user())->whereIn('id', $validated['category_ids'])->pluck('id')->all();
+            $validated['category_ids'] = array_values(array_intersect(array_map('intval', $validated['category_ids']), $own));
+        }
+
+        if (! empty($validated['streamer_login'])) {
+            $validated['streamer_login'] = strtolower($validated['streamer_login']);
+            $this->ensureChannelTracked($request->user(), $validated['streamer_login'], $lookup);
+        }
+
+        if (array_key_exists('notification_template', $validated)) {
+            $validated['notification_template'] = app(AlertTemplateValidator::class)->validate($validated['notification_template']);
+        }
+
+        return $validated;
+    }
+
+    private function ensureChannelTracked(User $owner, string $login, TwitchUserLookup $lookup): void
+    {
+        if (TrackedChannel::ownedBy($owner)->where('user_login', $login)->exists()) {
+            return;
+        }
+
+        $user = $lookup->tryFind($login);
+        $userId = $user['id'] ?? $login;
+
+        if (TrackedChannel::ownedBy($owner)->where('twitch_user_id', $userId)->exists()) {
+            return;
+        }
+
+        TrackedChannel::createFor($owner, [
+            'twitch_user_id' => $userId,
+            'user_login' => $login,
+            'user_name' => $user['display_name'] ?? $login,
+            'profile_image_url' => $user['profile_image_url'] ?? null,
+        ]);
     }
 }

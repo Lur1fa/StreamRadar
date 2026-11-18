@@ -2,7 +2,8 @@
 
 namespace App\Models;
 
-use Illuminate\Contracts\Encryption\DecryptException;
+use App\Support\Secrets;
+use Closure;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Cache;
@@ -15,7 +16,7 @@ use Illuminate\Support\Facades\Log;
  *
  * Secret keys (see SECRET_KEYS) are encrypted at rest with APP_KEY, cached
  * only in their encrypted form, never exported, and only ever leave the
- * server as a mask (see mask()). Everything that reads a secret must go
+ * server as a mask (see maskValue()). Everything that reads a secret must go
  * through Setting::get() / UserSetting::get(); everything that ships
  * settings to a browser must go through publicView().
  */
@@ -72,9 +73,16 @@ class Setting extends Model
     /** Everything the Settings page can read or write. */
     public const MANAGED_KEYS = [...self::SERVER_KEYS, ...self::ACCOUNT_KEYS];
 
-    /** Values used while nothing is stored. */
+    /**
+     * Values in effect while nothing is stored. The Settings page shows these
+     * and the application uses them, so the two always agree. There is no
+     * mail server by default: e-mail stays unavailable until an
+     * administrator enters one.
+     */
     public const DEFAULTS = [
-        'sync_frequency_minutes' => '1',
+        'sync_frequency_minutes' => '5',
+        'smtp_port' => '587',
+        'mail_from_name' => 'StreamRadar',
         'global_min_viewers' => '0',
         'global_min_avg_viewers' => '0',
         'global_languages' => '[]',
@@ -132,6 +140,18 @@ class Setting extends Model
         return self::fromStorage($key, $stored['v']) ?? $default;
     }
 
+    /** The value in effect: the stored one, else the built-in default. */
+    public static function effective(string $key): mixed
+    {
+        return static::get($key, self::DEFAULTS[$key] ?? null);
+    }
+
+    /** Minutes between automatic scans. The only place its default is read. */
+    public static function syncFrequencyMinutes(): int
+    {
+        return max(1, (int) static::effective('sync_frequency_minutes'));
+    }
+
     public static function set(string $key, mixed $value): void
     {
         static::updateOrCreate(
@@ -155,24 +175,22 @@ class Setting extends Model
     /** Decrypt secrets on the way out; null when a secret cannot be decrypted. */
     public static function fromStorage(string $key, mixed $value): mixed
     {
-        if ($value !== null && self::isSecret($key)) {
-            return self::decryptSecret($key, (string) $value);
+        if ($value === null || ! self::isSecret($key)) {
+            return $value;
         }
 
-        return $value;
+        $plain = Secrets::tryDecrypt((string) $value);
+        if ($plain === null) {
+            Log::error("Setting [{$key}] could not be decrypted (APP_KEY changed?). Re-enter it in Settings.");
+        }
+
+        return $plain;
     }
 
     public static function forget(string $key): void
     {
         static::where('key', $key)->delete();
         Cache::forget("setting.{$key}");
-    }
-
-    public static function setMany(array $settings): void
-    {
-        foreach ($settings as $key => $value) {
-            static::set($key, $value);
-        }
     }
 
     public static function getMany(array $keys, array $defaults = []): array
@@ -196,11 +214,6 @@ class Setting extends Model
      * A display-only representation of a secret: never the value itself.
      * URLs keep scheme + host so the user can recognise the target.
      */
-    public static function mask(string $key): ?string
-    {
-        return self::maskValue($key, static::get($key));
-    }
-
     public static function maskValue(string $key, mixed $value): ?string
     {
         if ($value === null || $value === '') {
@@ -225,34 +238,33 @@ class Setting extends Model
      */
     public static function publicView(array $keys, array $defaults = []): array
     {
+        return self::browserView($keys, fn (string $key) => static::get($key, $defaults[$key] ?? null));
+    }
+
+    /**
+     * The browser shape of publicView(), for any store: $read returns the
+     * value of one key. Shared with UserSetting::publicView().
+     *
+     * @param  string[]  $keys
+     * @param  Closure(string): mixed  $read
+     * @return array<string, mixed>
+     */
+    public static function browserView(array $keys, Closure $read): array
+    {
         $view = [];
         foreach ($keys as $key) {
+            $value = $read($key);
+
             if (self::isSecret($key)) {
-                $view[$key.'_set'] = static::has($key);
-                $view[$key.'_masked'] = static::mask($key);
+                $view[$key.'_set'] = $value !== null && $value !== '';
+                $view[$key.'_masked'] = self::maskValue($key, $value);
 
                 continue;
             }
-            $view[$key] = static::get($key, $defaults[$key] ?? null);
+
+            $view[$key] = $value;
         }
 
         return $view;
-    }
-
-    /** All non-secret, non-internal managed settings (for export). */
-    public static function exportable(): array
-    {
-        return static::getMany(self::exportableKeys());
-    }
-
-    private static function decryptSecret(string $key, string $value): ?string
-    {
-        try {
-            return Crypt::decryptString($value);
-        } catch (DecryptException) {
-            Log::error("Setting [{$key}] could not be decrypted (APP_KEY changed?). Re-enter it in Settings.");
-
-            return null;
-        }
     }
 }

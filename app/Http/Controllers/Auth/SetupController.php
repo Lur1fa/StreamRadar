@@ -4,10 +4,10 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\Auth\SessionLogin;
 use App\Services\Auth\SetupTokenService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rules\Password;
@@ -42,7 +42,7 @@ class SetupController extends Controller
             'setup_token' => ['required', 'string', 'max:128'],
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'string', 'email:rfc', 'max:255'],
-            'password' => ['required', 'confirmed', Password::min((int) config('security.password_min_length', 12))],
+            'password' => ['required', 'confirmed', Password::defaults()],
         ]);
 
         if (! $this->setup->verify($data['setup_token'])) {
@@ -68,10 +68,7 @@ class SetupController extends Controller
             return $user;
         });
 
-        $request->session()->regenerate();
-        Auth::login($user);
-        $request->session()->put('auth.provider', 'local');
-        $user->forceFill(['last_login_at' => now()])->save();
+        SessionLogin::start($request, $user, SessionLogin::PROVIDER_LOCAL);
 
         Log::info('Initial administrator account created.', ['user_id' => $user->id]);
 

@@ -2,7 +2,6 @@
 
 namespace App\Console\Commands;
 
-use App\Models\Setting;
 use App\Services\Auth\SetupTokenService;
 use Illuminate\Console\Command;
 
@@ -26,19 +25,7 @@ class SetupCommand extends Command
         // Run migrations
         $this->call('migrate', ['--force' => true]);
 
-        // Seed default installation settings. Filters and appearance belong
-        // to each account and start from their built-in defaults.
-        $defaults = [
-            'sync_frequency_minutes' => '5',
-        ];
-
-        foreach ($defaults as $key => $value) {
-            if (Setting::get($key) === null) {
-                Setting::set($key, $value);
-            }
-        }
-
-        $this->info('Default settings initialized.');
+        // Nothing to seed: settings that are not stored use Setting::DEFAULTS.
         $this->newLine();
 
         if ($setup->isSetupRequired()) {

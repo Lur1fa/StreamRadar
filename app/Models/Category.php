@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Models\Concerns\BelongsToOwner;
+use App\Support\Twitch;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -10,6 +11,10 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class Category extends Model
 {
     use BelongsToOwner, HasFactory;
+
+    /** Columns in a configuration backup. */
+    public const EXPORT_COLUMNS = ['twitch_id', 'name', 'box_art_url', 'is_active', 'notifications_enabled', 'use_global_filters', 'filter_source', 'min_viewers', 'min_avg_viewers', 'languages', 'keywords', 'tags'];
+
     protected $fillable = [
         'twitch_id',
         'name',
@@ -76,22 +81,17 @@ class Category extends Model
         }
 
         // The account's own default filters
-        $defaults = UserSetting::getMany((int) $this->owner_id, ['global_min_viewers', 'global_min_avg_viewers', 'global_languages', 'global_keywords']);
+        $defaults = UserSetting::defaultFilters((int) $this->owner_id);
 
         return [
-            'min_viewers' => (int) $defaults['global_min_viewers'] ?: null,
-            'min_avg_viewers' => (int) $defaults['global_min_avg_viewers'] ?: null,
-            'languages' => $defaults['global_languages'] ? (json_decode($defaults['global_languages'], true) ?: []) : [],
-            'keywords' => $defaults['global_keywords'] ? (json_decode($defaults['global_keywords'], true) ?: []) : [],
+            ...$defaults,
+            'min_viewers' => $defaults['min_viewers'] ?: null,
+            'min_avg_viewers' => $defaults['min_avg_viewers'] ?: null,
         ];
     }
 
     public function getBoxArtUrlSized(int $width = 188, int $height = 250): ?string
     {
-        if (! $this->box_art_url) {
-            return null;
-        }
-
-        return str_replace(['{width}', '{height}'], [$width, $height], $this->box_art_url);
+        return Twitch::sizedImage($this->box_art_url, $width, $height);
     }
 }

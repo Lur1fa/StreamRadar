@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { useForm, usePage } from '@inertiajs/vue3';
-import { Radar, LogIn, KeyRound, ShieldAlert } from 'lucide-vue-next';
+import { LogIn, KeyRound, ShieldAlert } from 'lucide-vue-next';
 import { computed } from 'vue';
+import AuthLayout from '@/layouts/AuthLayout.vue';
+import { usePageErrors } from '@/composables/usePageErrors';
 
 const props = defineProps<{
     localLogin: boolean;
@@ -11,7 +13,7 @@ const props = defineProps<{
 }>();
 
 const page = usePage();
-const errors = computed(() => (page.props.errors ?? {}) as Record<string, string>);
+const errors = usePageErrors();
 const flash = computed(() => page.props.flash as { success?: string | null; error?: string | null });
 
 const form = useForm({
@@ -27,16 +29,7 @@ function submit() {
 </script>
 
 <template>
-    <div class="min-h-screen bg-gray-50 dark:bg-zinc-950 flex items-center justify-center px-4">
-        <div class="w-full max-w-sm">
-            <div class="text-center mb-8">
-                <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center mx-auto mb-4">
-                    <Radar class="w-7 h-7 text-white" :stroke-width="2" />
-                </div>
-                <h1 class="text-2xl font-bold text-gray-900 dark:text-white">StreamRadar</h1>
-                <p class="text-sm text-gray-500 dark:text-zinc-500 mt-1">Sign in to continue</p>
-            </div>
-
+    <AuthLayout title="StreamRadar" subtitle="Sign in to continue">
             <div class="bg-white dark:bg-zinc-900 rounded-xl p-6 shadow-sm dark:shadow-none space-y-4">
                 <div v-if="flash?.success" class="text-sm text-green-600 dark:text-green-400 text-center">{{ flash.success }}</div>
                 <div v-if="errors.oidc" class="text-sm text-red-500 text-center">{{ errors.oidc }}</div>
@@ -82,6 +75,5 @@ function submit() {
                     </button>
                 </form>
             </div>
-        </div>
-    </div>
+    </AuthLayout>
 </template>

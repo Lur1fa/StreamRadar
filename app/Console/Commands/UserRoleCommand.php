@@ -2,11 +2,14 @@
 
 namespace App\Console\Commands;
 
+use App\Console\Commands\Concerns\ManagesAccounts;
 use App\Models\User;
 use Illuminate\Console\Command;
 
 class UserRoleCommand extends Command
 {
+    use ManagesAccounts;
+
     protected $signature = 'user:role {email : E-mail of the account} {role : admin or user}';
 
     protected $description = 'Change the role of an account';
@@ -20,14 +23,12 @@ class UserRoleCommand extends Command
             return self::FAILURE;
         }
 
-        $user = User::findByEmail($this->argument('email'));
+        $user = $this->accountOrFail((string) $this->argument('email'));
         if (! $user) {
-            $this->error('No account with that e-mail address.');
-
             return self::FAILURE;
         }
 
-        if ($role === User::ROLE_USER && $user->isAdmin() && User::admins()->active()->where('id', '!=', $user->id)->doesntExist()) {
+        if ($role === User::ROLE_USER && $user->isLastActiveAdmin()) {
             $this->error('Refusing to demote the last administrator.');
 
             return self::FAILURE;

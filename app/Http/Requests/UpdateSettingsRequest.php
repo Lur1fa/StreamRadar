@@ -4,6 +4,7 @@ namespace App\Http\Requests;
 
 use App\Models\Setting;
 use App\Models\User;
+use App\Support\SettingValue;
 use Illuminate\Foundation\Http\FormRequest;
 
 /**
@@ -115,12 +116,7 @@ class UpdateSettingsRequest extends FormRequest
 
                 continue;
             }
-            if (in_array($key, self::BOOLEAN_KEYS, true)) {
-                $out[$key] = filter_var($value, FILTER_VALIDATE_BOOLEAN) ? '1' : '0';
-
-                continue;
-            }
-            $out[$key] = is_bool($value) ? ($value ? '1' : '0') : (string) $value;
+            $out[$key] = in_array($key, self::BOOLEAN_KEYS, true) ? SettingValue::flag($value) : SettingValue::encode($value);
         }
 
         return $out;

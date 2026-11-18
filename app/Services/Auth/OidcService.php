@@ -5,6 +5,10 @@ namespace App\Services\Auth;
 use App\Models\Setting;
 use App\Models\User;
 use App\Support\Redactor;
+use App\Support\SettingValue;
+use App\Support\Url;
+use Closure;
+use Illuminate\Http\Client\Response;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -79,29 +83,14 @@ class OidcService
 
     public function setAutoProvision(bool $enabled): void
     {
-        Setting::set(self::AUTO_PROVISION_SETTING, $enabled ? '1' : '0');
+        Setting::set(self::AUTO_PROVISION_SETTING, SettingValue::encode($enabled));
     }
 
     // ── Discovery ────────────────────────────────────────────────────────
 
     public function discovery(bool $fresh = false): array
     {
-        $key = 'oidc:discovery:'.sha1($this->issuer());
-
-        if ($fresh) {
-            Cache::forget($key);
-        }
-
-        return Cache::remember($key, (int) config('oidc.discovery_ttl', 3600), function () {
-            $url = $this->issuer().'/.well-known/openid-configuration';
-
-            try {
-                $response = Http::timeout($this->timeout())->acceptJson()->get($url);
-            } catch (Throwable $e) {
-                $this->logFailure('OIDC discovery request failed', $e);
-                throw new OidcException('The identity provider could not be reached.');
-            }
-
+        return $this->rememberJson('discovery', $fresh, fn () => $this->issuer().'/.well-known/openid-configuration', function (Response $response) {
             $doc = $response->successful() ? $response->json() : null;
             if (! is_array($doc) || empty($doc['authorization_endpoint']) || empty($doc['token_endpoint']) || empty($doc['jwks_uri'])) {
                 Log::error('OIDC discovery document is invalid or incomplete.', ['status' => $response->status()]);
@@ -126,20 +115,7 @@ class OidcService
 
     public function jwks(bool $fresh = false): array
     {
-        $key = 'oidc:jwks:'.sha1($this->issuer());
-
-        if ($fresh) {
-            Cache::forget($key);
-        }
-
-        return Cache::remember($key, (int) config('oidc.discovery_ttl', 3600), function () {
-            try {
-                $response = Http::timeout($this->timeout())->acceptJson()->get($this->discovery()['jwks_uri']);
-            } catch (Throwable $e) {
-                $this->logFailure('OIDC JWKS request failed', $e);
-                throw new OidcException('The identity provider could not be reached.');
-            }
-
+        return $this->rememberJson('jwks', $fresh, fn () => $this->discovery()['jwks_uri'], function (Response $response) {
             $keys = $response->successful() ? ($response->json('keys') ?? null) : null;
             if (! is_array($keys)) {
                 throw new OidcException('The identity provider configuration is invalid.');
@@ -178,9 +154,7 @@ class OidcService
             'code_challenge_method' => 'S256',
         ];
 
-        $endpoint = (string) $discovery['authorization_endpoint'];
-
-        return $endpoint.(str_contains($endpoint, '?') ? '&' : '?').http_build_query($params, '', '&', PHP_QUERY_RFC3986);
+        return Url::withQuery((string) $discovery['authorization_endpoint'], $params);
     }
 
     // ── Callback ─────────────────────────────────────────────────────────
@@ -391,11 +365,10 @@ class OidcService
 
         $this->syncRole($user, $identity);
 
-        $updates = ['last_login_at' => now()];
+        // The provider's display name wins; last_login_at is stamped by SessionLogin.
         if ($identity->name && $identity->name !== $user->name) {
-            $updates['name'] = $identity->name;
+            $user->forceFill(['name' => $identity->name])->save();
         }
-        $user->forceFill($updates)->save();
 
         return $user;
     }
@@ -421,7 +394,7 @@ class OidcService
             $params['id_token_hint'] = $idToken;
         }
 
-        return $endpoint.(str_contains($endpoint, '?') ? '&' : '?').http_build_query($params, '', '&', PHP_QUERY_RFC3986);
+        return Url::withQuery($endpoint, $params);
     }
 
     // ── Internals ────────────────────────────────────────────────────────
@@ -453,7 +426,7 @@ class OidcService
             return;
         }
 
-        if ($target === User::ROLE_USER && $user->isAdmin() && User::admins()->active()->count() <= 1) {
+        if ($target === User::ROLE_USER && $user->isLastActiveAdmin()) {
             Log::warning("OIDC role sync would demote the last administrator [{$user->email}]; keeping admin role.");
 
             return;
@@ -516,6 +489,33 @@ class OidcService
         }
 
         return $candidates[0] ?? null;
+    }
+
+    /**
+     * A JSON document from the provider, cached per issuer. $validate gets
+     * the response and returns what to cache, or throws.
+     *
+     * @param  Closure(): string  $url
+     * @param  Closure(Response): array  $validate
+     */
+    private function rememberJson(string $name, bool $fresh, Closure $url, Closure $validate): array
+    {
+        $key = "oidc:{$name}:".sha1($this->issuer());
+
+        if ($fresh) {
+            Cache::forget($key);
+        }
+
+        return Cache::remember($key, (int) config('oidc.discovery_ttl', 3600), function () use ($name, $url, $validate) {
+            try {
+                $response = Http::timeout($this->timeout())->acceptJson()->get($url());
+            } catch (Throwable $e) {
+                $this->logFailure("OIDC {$name} request failed", $e);
+                throw new OidcException('The identity provider could not be reached.');
+            }
+
+            return $validate($response);
+        });
     }
 
     private function timeout(): int

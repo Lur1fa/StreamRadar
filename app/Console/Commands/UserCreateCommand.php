@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Console\Commands\Concerns\ManagesAccounts;
 use App\Models\User;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Validator;
@@ -9,6 +10,8 @@ use Illuminate\Validation\Rules\Password;
 
 class UserCreateCommand extends Command
 {
+    use ManagesAccounts;
+
     protected $signature = 'user:create
                             {--admin : Give the account the administrator role}
                             {--name= : Display name}
@@ -23,18 +26,9 @@ class UserCreateCommand extends Command
         $name = $this->option('name') ?: $this->ask('Display name');
         $email = strtolower(trim((string) ($this->option('email') ?: $this->ask('E-mail address (used to sign in)'))));
 
-        if ($this->option('password-stdin')) {
-            $password = rtrim((string) stream_get_contents(STDIN), "\r\n");
-        } elseif ($this->option('password') !== null) {
-            $password = (string) $this->option('password');
-        } else {
-            $password = (string) $this->secret('Password (min. '.config('security.password_min_length', 12).' characters)');
-            $confirm = (string) $this->secret('Confirm password');
-            if (! hash_equals($password, $confirm)) {
-                $this->error('Passwords do not match.');
-
-                return self::FAILURE;
-            }
+        $password = $this->newPassword('Password (min. '.config('security.password_min_length').' characters)', 'Confirm password');
+        if ($password === null) {
+            return self::FAILURE;
         }
 
         $validator = Validator::make(
@@ -42,7 +36,7 @@ class UserCreateCommand extends Command
             [
                 'name' => ['required', 'string', 'max:255'],
                 'email' => ['required', 'email:rfc', 'max:255', 'unique:users,email'],
-                'password' => ['required', 'string', Password::min((int) config('security.password_min_length', 12))],
+                'password' => ['required', 'string', Password::defaults()],
             ],
         );
 

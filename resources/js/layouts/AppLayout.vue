@@ -7,6 +7,7 @@ import ThemeToggle from '@/components/ThemeToggle.vue';
 import FlashMessage from '@/components/FlashMessage.vue';
 import { useNow } from '@/composables/useNow';
 import { useAuth } from '@/composables/useAuth';
+import { relativeTime } from '@/utils';
 import type { PageProps } from '@/types';
 
 const page = usePage<PageProps>();
@@ -29,7 +30,7 @@ function triggerSync() {
 let autoReloadInterval: ReturnType<typeof setInterval>;
 onMounted(() => {
     autoReloadInterval = setInterval(() => {
-        router.reload({ only: ['stats', 'appSettings', 'pendingAlerts'], preserveScroll: true });
+        router.reload({ only: ['stats', 'appSettings'], preserveScroll: true });
     }, 60000);
 });
 onUnmounted(() => clearInterval(autoReloadInterval));
@@ -40,15 +41,7 @@ router.on('navigate', () => { mobileMenuOpen.value = false; });
 const now = useNow();
 
 function formatLastSync(iso: string | null): string {
-    if (!iso) return 'Never';
-    const date = new Date(iso);
-    const diffMs = now.value - date.getTime();
-    const diffMin = Math.floor(diffMs / 60000);
-    if (diffMin < 1) return 'Just now';
-    if (diffMin < 60) return `${diffMin}m ago`;
-    const diffH = Math.floor(diffMin / 60);
-    if (diffH < 24) return `${diffH}h ago`;
-    return date.toLocaleDateString();
+    return relativeTime(iso, now.value);
 }
 </script>
 

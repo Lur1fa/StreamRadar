@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, watch } from 'vue';
 import { AlertTriangle } from 'lucide-vue-next';
+import { useDocumentKeydown } from '@/composables/useDocumentKeydown';
 
 const props = withDefaults(defineProps<{
     show: boolean;
@@ -22,17 +22,10 @@ const emit = defineEmits<{
     cancel: [];
 }>();
 
-function onKeydown(e: KeyboardEvent) {
+useDocumentKeydown(() => props.show, (e) => {
     if (e.key === 'Escape') emit('cancel');
     if (e.key === 'Enter') emit('confirm');
-}
-
-watch(() => props.show, (show) => {
-    if (show) document.addEventListener('keydown', onKeydown);
-    else document.removeEventListener('keydown', onKeydown);
 });
-
-onUnmounted(() => document.removeEventListener('keydown', onKeydown));
 </script>
 
 <template>

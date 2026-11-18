@@ -6,6 +6,7 @@ use App\Models\NotificationDestination;
 use App\Rules\SafeWebhookUrl;
 use App\Services\Http\SafeHttpClient;
 use App\Services\Notifications\DestinationType;
+use App\Support\Text;
 use Closure;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Support\Facades\Validator as ValidatorFactory;
@@ -25,7 +26,7 @@ use Illuminate\Validation\Validator;
 class NotificationDestinationRequest extends FormRequest
 {
     /** No control characters (CR/LF would split a header). */
-    private const PRINTABLE = 'regex:/^[^\x00-\x1F\x7F]*$/';
+    private const PRINTABLE = Text::PRINTABLE_RULE;
 
     /** One word of visible ASCII, as tokens are. */
     private const TOKEN = 'regex:/^[\x21-\x7E]+$/';
@@ -97,7 +98,7 @@ class NotificationDestinationRequest extends FormRequest
         $rules = match ($type) {
             DestinationType::Ntfy => [
                 'server_url' => ['required', 'string', 'max:2048', new SafeWebhookUrl(credentialsHint: 'Enter the access token, or the user name and password, in their own fields.')],
-                'topic' => ['required', 'string', 'regex:/^[A-Za-z0-9_\-]{1,64}$/'],
+                'topic' => ['required', 'string', 'regex:'.DestinationType::NTFY_TOPIC],
                 'username' => [...$text(255), 'not_regex:/:/'],
                 'title_prefix' => $text(64),
             ],
@@ -115,7 +116,7 @@ class NotificationDestinationRequest extends FormRequest
                 'subject_prefix' => $text(64),
             ],
             DestinationType::Telegram => [
-                'chat_id' => ['required', 'string', 'max:64', 'regex:/^-?\d+$/'],
+                'chat_id' => ['required', 'string', 'max:64', 'regex:'.DestinationType::TELEGRAM_CHAT_ID],
             ],
             DestinationType::Discord => [],
         };
@@ -153,7 +154,7 @@ class NotificationDestinationRequest extends FormRequest
             ],
             DestinationType::Email => [],
             DestinationType::Telegram => [
-                'secrets.bot_token' => [$required('bot_token'), 'nullable', 'string', 'max:255', 'regex:/^\d{3,}:[A-Za-z0-9_\-]{10,}$/'],
+                'secrets.bot_token' => [$required('bot_token'), 'nullable', 'string', 'max:255', 'regex:'.DestinationType::TELEGRAM_BOT_TOKEN],
             ],
             DestinationType::Discord => [
                 'secrets.webhook_url' => [$required('webhook_url'), 'nullable', 'string', 'max:2048', SafeWebhookUrl::discord()],
@@ -256,13 +257,7 @@ class NotificationDestinationRequest extends FormRequest
         $clear = (array) ($validated['clear_secrets'] ?? []);
         $stored = $this->storedSecrets();
 
-        $config = [];
-        foreach ($type->configKeys() as $key) {
-            $value = $validated['config'][$key] ?? null;
-            $config[$key] = in_array($key, ['headers', 'query'], true)
-                ? array_values(array_filter((array) $value, 'is_string'))
-                : (is_scalar($value) ? (string) $value : '');
-        }
+        $config = $type->normalizeConfig((array) ($validated['config'] ?? []));
 
         $secrets = [];
         foreach ($type->secretKeys() as $key) {

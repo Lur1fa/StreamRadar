@@ -21,7 +21,7 @@ final class ImageUrl
         }
 
         $host = strtolower($parts['host']);
-        foreach ((array) config('security.image_host_suffixes', ['jtvnw.net', 'twitch.tv']) as $suffix) {
+        foreach ((array) config('security.image_host_suffixes') as $suffix) {
             $suffix = strtolower($suffix);
             if ($host === $suffix || str_ends_with($host, '.'.$suffix)) {
                 return $url;

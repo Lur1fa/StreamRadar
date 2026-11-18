@@ -6,14 +6,16 @@ use App\Mail\StreamAlertMail;
 use App\Models\AlertRule;
 use App\Models\HistoryEvent;
 use App\Models\NotificationDestination;
-use App\Models\Setting;
 use App\Models\Stream;
 use App\Models\StreamAlertTracking;
 use App\Services\Http\SafeHttpClient;
+use App\Services\Mail\SmtpSettings;
+use App\Services\Notifications\AlertPresenter;
 use App\Services\Notifications\DeliveryFailed;
 use App\Services\Notifications\DestinationType;
-use App\Support\ImageUrl;
+use App\Support\Brand;
 use App\Support\Redactor;
+use App\Support\Text;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -22,7 +24,7 @@ use Throwable;
 class AlertService
 {
     public function __construct(
-        private AlertTemplateRenderer $templateRenderer,
+        private AlertPresenter $presenter,
         private SafeHttpClient $http,
     ) {}
 
@@ -66,40 +68,21 @@ class AlertService
                 }
             }
 
-            if ($silent) {
-                StreamAlertTracking::updateOrCreate(
-                    ['alert_rule_id' => $rule->id, 'stream_twitch_id' => $stream->twitch_id],
-                    ['streamer_login' => $stream->user_login],
-                );
+            self::track($rule, $stream, triggered: ! $silent);
 
-                continue;
+            if (! $silent) {
+                $triggeredAlerts[] = ['rule' => $rule, 'stream' => $stream];
             }
-
-            StreamAlertTracking::updateOrCreate(
-                ['alert_rule_id' => $rule->id, 'stream_twitch_id' => $stream->twitch_id],
-                ['streamer_login' => $stream->user_login, 'triggered_at' => now()],
-            );
-
-            $triggeredAlerts[] = [
-                'rule' => $rule,
-                'stream' => $stream,
-            ];
         }
 
         if (! empty($triggeredAlerts)) {
-            $ruleNames = array_map(fn ($a) => $a['rule']->name, $triggeredAlerts);
-            $ruleIds = array_map(fn ($a) => $a['rule']->id, $triggeredAlerts);
-
             HistoryEvent::createFor((int) $stream->owner_id, [
-                'type' => 'alert_triggered',
-                'stream_twitch_id' => $stream->twitch_id,
-                'streamer_login' => $stream->user_login,
-                'streamer_name' => $stream->user_name,
-                'category_name' => $stream->game_name ?? $stream->category?->name,
-                'title' => $stream->title,
-                'viewer_count' => $stream->viewer_count,
-                'profile_image_url' => $stream->profile_image_url,
-                'metadata' => ['rule_names' => $ruleNames, 'rule_ids' => $ruleIds],
+                'type' => HistoryEvent::ALERT_TRIGGERED,
+                ...HistoryEvent::streamColumns($stream, $stream->game_name),
+                'metadata' => [
+                    'rule_names' => array_map(fn ($a) => $a['rule']->name, $triggeredAlerts),
+                    'rule_ids' => array_map(fn ($a) => $a['rule']->id, $triggeredAlerts),
+                ],
             ]);
         }
 
@@ -108,18 +91,23 @@ class AlertService
 
     public function seedTrackingForRule(AlertRule $rule): void
     {
-        $streams = Stream::ownedBy((int) $rule->owner_id)->get();
-
-        foreach ($streams as $stream) {
-            if (! $rule->matchesStream($stream)) {
-                continue;
+        foreach (Stream::ownedBy((int) $rule->owner_id)->get() as $stream) {
+            if ($rule->matchesStream($stream)) {
+                self::track($rule, $stream, triggered: false);
             }
-
-            StreamAlertTracking::updateOrCreate(
-                ['alert_rule_id' => $rule->id, 'stream_twitch_id' => $stream->twitch_id],
-                ['streamer_login' => $stream->user_login],
-            );
         }
+    }
+
+    /**
+     * Remember that a rule has seen a stream, so it does not alert for it
+     * again. $triggered also stamps the time an alert went out.
+     */
+    private static function track(AlertRule $rule, Stream $stream, bool $triggered): void
+    {
+        StreamAlertTracking::updateOrCreate(
+            ['alert_rule_id' => $rule->id, 'stream_twitch_id' => $stream->twitch_id],
+            ['streamer_login' => $stream->user_login, ...($triggered ? ['triggered_at' => now()] : [])],
+        );
     }
 
     /**
@@ -217,67 +205,6 @@ class AlertService
         }
     }
 
-    /**
-     * @return array<array{stream: Stream, rules: string[], template: ?array}>
-     */
-    private function groupByStream(array $alerts): array
-    {
-        $grouped = [];
-        foreach ($alerts as $alert) {
-            // Keep alerts with different templates separate while retaining the
-            // existing batching behavior for rules using the same template.
-            $key = $alert['stream']->twitch_id.'|'.md5(json_encode($alert['rule']->notification_template));
-            if (! isset($grouped[$key])) {
-                $grouped[$key] = ['stream' => $alert['stream'], 'rules' => [], 'template' => $alert['rule']->notification_template];
-            }
-            $grouped[$key]['rules'][] = $alert['rule']->name;
-        }
-
-        return array_values($grouped);
-    }
-
-    /**
-     * Build a presentation-ready data array for a grouped stream entry.
-     */
-    private function presentStream(array $entry): array
-    {
-        $stream = $entry['stream'];
-        $categoryBoxArt = $stream->game_box_art_url
-            ? str_replace(['{width}', '{height}'], ['188', '250'], $stream->game_box_art_url)
-            : $stream->category?->getBoxArtUrlSized(188, 250);
-
-        return [
-            'stream' => $stream,
-            'rules' => implode(', ', $entry['rules']),
-            'url' => $stream->getTwitchUrl(),
-            'viewers' => number_format($stream->viewer_count),
-            'category' => $stream->game_name ?? $stream->category?->name ?? 'Unknown',
-            'language' => strtoupper($stream->language ?? '?'),
-            'avatar' => ImageUrl::safe($stream->profile_image_url),
-            'thumbnail' => ImageUrl::safe($stream->getThumbnailUrlSized(440, 248)),
-            'category_box_art' => ImageUrl::safe($categoryBoxArt),
-            'template' => $entry['template'],
-        ];
-    }
-
-    /**
-     * Render a template, falling back to the built-in format when the stored
-     * template is invalid, so one bad rule can never break a channel.
-     */
-    private function render(?array $template, Stream $stream, array $entry, string $channel): string
-    {
-        try {
-            return $this->templateRenderer->render($template, $stream, $entry, $channel);
-        } catch (Throwable $e) {
-            Log::warning('Invalid alert notification template; using default format.', [
-                'rules' => $entry['rules'] ?? [],
-                'error' => Redactor::message($e->getMessage()),
-            ]);
-
-            return $this->templateRenderer->render(null, $stream, $entry, $channel);
-        }
-    }
-
     // ── Discord ──────────────────────────────────────────────────────────
 
     private function sendDiscord(NotificationDestination $destination, array $alerts): void
@@ -285,19 +212,17 @@ class AlertService
         $webhookUrl = (string) $destination->secret('webhook_url');
 
         $embeds = [];
-        foreach ($this->groupByStream($alerts) as $entry) {
-            $p = $this->presentStream($entry);
+        foreach (AlertPresenter::group($alerts) as $entry) {
+            $p = AlertPresenter::details($entry['stream'], 188, 250);
+            $headline = AlertPresenter::headline($entry['stream']);
 
             $embed = [
-                'title' => "{$p['stream']->user_name} is live",
+                'title' => $headline,
                 'url' => $p['url'],
-                'color' => 0x9147FF,
-                'author' => [
-                    'name' => "{$p['stream']->user_name} is live",
-                    'url' => $p['url'],
-                ],
+                'color' => Brand::colorInt(),
+                'author' => ['name' => $headline, 'url' => $p['url']],
                 'timestamp' => now()->toIso8601String(),
-                'description' => $this->render($p['template'], $p['stream'], $entry, 'discord'),
+                'description' => $this->presenter->message($entry, 'discord'),
             ];
 
             if ($p['avatar']) {
@@ -322,12 +247,18 @@ class AlertService
         });
     }
 
+    /**
+     * Where a Discord webhook may point. Validation of a saved URL uses the
+     * same policy (SafeWebhookUrl::discord()).
+     *
+     * @return array{allowed_hosts: string[], require_https: bool, path_prefix: string}
+     */
     public static function discordPolicy(): array
     {
         return [
-            'allowed_hosts' => (array) config('security.webhook.discord_hosts', []),
+            'allowed_hosts' => (array) config('security.webhook.discord.hosts'),
             'require_https' => true,
-            'path_prefix' => '/api/webhooks/',
+            'path_prefix' => (string) config('security.webhook.discord.path_prefix'),
         ];
     }
 
@@ -341,17 +272,16 @@ class AlertService
         $apiBase = "https://api.telegram.org/bot{$token}";
         $policy = ['allowed_hosts' => ['api.telegram.org'], 'require_https' => true];
 
-        $this->eachMessage($this->groupByStream($alerts), function (array $entry) use ($apiBase, $chatId, $policy) {
-            $p = $this->presentStream($entry);
-            $s = $p['stream'];
+        $this->eachMessage(AlertPresenter::group($alerts), function (array $entry) use ($apiBase, $chatId, $policy) {
+            $thumbnail = AlertPresenter::details($entry['stream'], 188, 250)['thumbnail'];
 
-            $caption = '<b>'.htmlspecialchars("{$s->user_name} is live", ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')."</b>\n"
-                .$this->render($p['template'], $s, $entry, 'telegram');
+            $caption = '<b>'.htmlspecialchars(AlertPresenter::headline($entry['stream']), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')."</b>\n"
+                .$this->presenter->message($entry, 'telegram');
 
-            $response = $p['thumbnail']
+            $response = $thumbnail
                 ? $this->http->post("{$apiBase}/sendPhoto", [
                     'chat_id' => $chatId,
-                    'photo' => $p['thumbnail'],
+                    'photo' => $thumbnail,
                     'caption' => $caption,
                     'parse_mode' => 'HTML',
                 ], [], $policy)
@@ -378,9 +308,9 @@ class AlertService
         $config = $destination->config ?? [];
 
         $payload = [];
-        foreach ($this->groupByStream($alerts) as $entry) {
-            $p = $this->presentStream($entry);
-            $s = $p['stream'];
+        foreach (AlertPresenter::group($alerts) as $entry) {
+            $s = $entry['stream'];
+            $p = AlertPresenter::details($s, 188, 250);
 
             $payload[] = [
                 'event' => 'stream.alert',
@@ -412,7 +342,7 @@ class AlertService
         $headers = [];
         foreach ($destination->headers() as $name => $value) {
             $replacesAuth = $auth !== 'none' && strcasecmp($name, 'Authorization') === 0;
-            if (! $replacesAuth && ! NotificationDestination::isReservedHeader($name) && ! preg_match('/[\x00-\x1F\x7F]/', $name.$value)) {
+            if (! $replacesAuth && ! NotificationDestination::isReservedHeader($name) && ! Text::hasControlChars($name.$value)) {
                 $headers[$name] = $value;
             }
         }
@@ -446,19 +376,16 @@ class AlertService
             $options['basic_auth'] = [(string) $config['username'], (string) $destination->secret('password')];
         }
 
-        $this->eachMessage($this->groupByStream($alerts), function (array $entry) use ($url, $prefix, $options) {
-            $p = $this->presentStream($entry);
-            $s = $p['stream'];
-
-            $body = $this->render($p['template'], $s, $entry, 'plain');
-            $title = trim($prefix.' '."{$s->user_name} is live");
+        $this->eachMessage(AlertPresenter::group($alerts), function (array $entry) use ($url, $prefix, $options) {
+            $p = AlertPresenter::details($entry['stream'], 188, 250);
+            $title = trim($prefix.' '.AlertPresenter::headline($entry['stream']));
 
             $headers = [
                 'Title' => '=?UTF-8?B?'.base64_encode($title).'?=',
             ];
 
-            // Never put a value with CR/LF or control characters into a header.
-            if ($p['url'] !== '' && ! preg_match('/[\s\x00-\x1F\x7F]/', $p['url'])) {
+            // Never put a value with whitespace or control characters into a header.
+            if ($p['url'] !== '' && ! preg_match('/\s/', $p['url']) && ! Text::hasControlChars($p['url'])) {
                 $headers['Click'] = $p['url'];
             }
             if ($p['thumbnail']) {
@@ -469,7 +396,7 @@ class AlertService
                 $headers['Icon'] = $p['avatar'];
             }
 
-            self::ensureSuccessful($this->http->send('POST', $url, $body, $headers, $options), 'ntfy');
+            self::ensureSuccessful($this->http->send('POST', $url, $this->presenter->message($entry, 'plain'), $headers, $options), 'ntfy');
         });
     }
 
@@ -481,30 +408,11 @@ class AlertService
      */
     private function sendEmail(NotificationDestination $destination, array $alerts): void
     {
-        $this->configureSmtp();
+        SmtpSettings::apply();
 
         $prefix = trim((string) ($destination->config['subject_prefix'] ?? ''));
 
         Mail::to($destination->recipients())->send(new StreamAlertMail($alerts, $prefix !== '' ? $prefix : null));
-    }
-
-    private function configureSmtp(): void
-    {
-        $host = Setting::get('smtp_host');
-        if (! $host) {
-            return;
-        }
-
-        config([
-            'mail.default' => 'smtp',
-            'mail.mailers.smtp.host' => $host,
-            'mail.mailers.smtp.port' => Setting::get('smtp_port', 587),
-            'mail.mailers.smtp.username' => Setting::get('smtp_username') ?: null,
-            'mail.mailers.smtp.password' => Setting::get('smtp_password') ?: null,
-            'mail.mailers.smtp.encryption' => Setting::get('smtp_encryption') ?: null,
-            'mail.from.address' => Setting::get('mail_from_address'),
-            'mail.from.name' => Setting::get('mail_from_name', 'StreamRadar'),
-        ]);
     }
 
     private function logFailure(string $message, Throwable $e, ?NotificationDestination $destination = null): void

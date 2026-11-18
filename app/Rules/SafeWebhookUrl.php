@@ -2,6 +2,7 @@
 
 namespace App\Rules;
 
+use App\Services\AlertService;
 use App\Services\Http\OutboundUrlGuard;
 use App\Services\Http\UnsafeUrlException;
 use Closure;
@@ -22,7 +23,9 @@ class SafeWebhookUrl implements ValidationRule
 
     public static function discord(): self
     {
-        return new self((array) config('security.webhook.discord_hosts', []), true, '/api/webhooks/');
+        $policy = AlertService::discordPolicy();
+
+        return new self($policy['allowed_hosts'], $policy['require_https'], $policy['path_prefix']);
     }
 
     public function validate(string $attribute, mixed $value, Closure $fail): void

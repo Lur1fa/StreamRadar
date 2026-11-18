@@ -1,17 +1,13 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { GripVertical, X, Plus } from 'lucide-vue-next';
 import type { AlertNotificationTemplate, AlertTemplateBlock, AlertTemplateField } from '@/types';
 
-const props = defineProps<{ modelValue: AlertNotificationTemplate | null }>();
+/** `fields` maps every template field to its label (AlertTemplateValidator::FIELD_LABELS). */
+const props = defineProps<{ modelValue: AlertNotificationTemplate | null; fields: Record<string, string> }>();
 const emit = defineEmits<{ 'update:modelValue': [value: AlertNotificationTemplate | null] }>();
 
-const fields: { field: AlertTemplateField; label: string }[] = [
-    { field: 'streamer_name', label: 'Streamer name' }, { field: 'streamer_login', label: 'Streamer login' },
-    { field: 'title', label: 'Title' }, { field: 'category', label: 'Category' }, { field: 'viewers', label: 'Viewers' },
-    { field: 'language', label: 'Language' }, { field: 'url', label: 'Twitch URL' }, { field: 'alert_names', label: 'Alert name' },
-    { field: 'tags', label: 'Tags' }, { field: 'started_at', label: 'Start time' },
-];
+const fieldList = computed(() => Object.entries(props.fields).map(([field, label]) => ({ field: field as AlertTemplateField, label })));
 const text = ref('');
 const dragging = ref<number | null>(null);
 
@@ -23,7 +19,7 @@ function remove(index: number) { const next = blocks(); next.splice(index, 1); u
 function move(index: number, target: number) {
     const next = blocks(); const [item] = next.splice(index, 1); next.splice(target, 0, item); update(next); dragging.value = null;
 }
-function label(block: AlertTemplateBlock) { return block.type === 'text' ? `“${block.value}”` : fields.find(f => f.field === block.field)?.label ?? block.field; }
+function label(block: AlertTemplateBlock) { return block.type === 'text' ? `“${block.value}”` : props.fields[block.field] ?? block.field; }
 </script>
 
 <template>
@@ -31,7 +27,7 @@ function label(block: AlertTemplateBlock) { return block.type === 'text' ? `“$
         <div>
             <div class="text-xs font-semibold text-gray-500 dark:text-zinc-400 mb-2">Notification message <span class="font-normal">(optional)</span></div>
             <div class="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-                <button v-for="item in fields" :key="item.field" type="button" @click="addField(item.field)"
+                <button v-for="item in fieldList" :key="item.field" type="button" @click="addField(item.field)"
                     class="flex items-center gap-1 px-2 py-1.5 text-left text-xs rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-600 dark:text-zinc-300 hover:bg-purple-50 dark:hover:bg-purple-500/10 hover:text-purple-700 transition-colors">
                     <Plus class="w-3 h-3 shrink-0" /> {{ item.label }}
                 </button>

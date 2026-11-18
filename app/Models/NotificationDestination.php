@@ -3,8 +3,9 @@
 namespace App\Models;
 
 use App\Models\Concerns\BelongsToOwner;
+use App\Models\Concerns\CachesSecretValues;
 use App\Services\Notifications\DestinationType;
-use Illuminate\Contracts\Encryption\DecryptException;
+use App\Support\Secrets;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -28,7 +29,7 @@ use Illuminate\Support\Facades\Log;
  */
 class NotificationDestination extends Model
 {
-    use BelongsToOwner, HasFactory;
+    use BelongsToOwner, CachesSecretValues, HasFactory;
 
     protected $fillable = ['name', 'type', 'enabled', 'config', 'secrets'];
 
@@ -39,9 +40,6 @@ class NotificationDestination extends Model
         'host', 'content-length', 'content-type', 'transfer-encoding', 'connection', 'keep-alive',
         'upgrade', 'te', 'trailer', 'expect', 'proxy-authorization', 'proxy-connection',
     ];
-
-    /** @var string[]|null Decrypted secrets of all accounts, for log redaction. */
-    private static ?array $secretValues = null;
 
     protected function casts(): array
     {
@@ -54,8 +52,8 @@ class NotificationDestination extends Model
 
     protected static function booted(): void
     {
-        static::saved(fn () => self::$secretValues = null);
-        static::deleted(fn () => self::$secretValues = null);
+        static::saved(fn () => static::flushSecretCache());
+        static::deleted(fn () => static::flushSecretCache());
     }
 
     protected function secrets(): Attribute
@@ -66,15 +64,16 @@ class NotificationDestination extends Model
                     return [];
                 }
 
-                try {
-                    $decoded = json_decode(Crypt::decryptString($value), true);
-
-                    return is_array($decoded) ? $decoded : [];
-                } catch (DecryptException) {
+                $plain = Secrets::tryDecrypt($value);
+                if ($plain === null) {
                     Log::error("Notification destination [{$this->getKey()}] could not be decrypted (APP_KEY changed?). Re-enter its secrets in Settings.");
 
                     return [];
                 }
+
+                $decoded = json_decode($plain, true);
+
+                return is_array($decoded) ? $decoded : [];
             },
             set: function (?array $value): ?string {
                 $clean = self::withoutEmpty($value ?? []);
@@ -183,19 +182,7 @@ class NotificationDestination extends Model
      */
     public function publicConfig(): array
     {
-        $defaults = match ($this->type) {
-            DestinationType::Webhook => ['method' => 'POST', 'auth' => 'none', 'auth_username' => '', 'headers' => [], 'query' => []],
-            default => array_fill_keys($this->type->configKeys(), ''),
-        };
-
-        $config = $this->config ?? [];
-        $public = [];
-        foreach ($defaults as $key => $default) {
-            $value = $config[$key] ?? null;
-            $public[$key] = is_array($default) ? array_values(array_filter((array) $value, 'is_string')) : (is_scalar($value) ? (string) $value : $default);
-        }
-
-        return $public;
+        return $this->type->normalizeConfig($this->config ?? []);
     }
 
     /**
@@ -230,33 +217,15 @@ class NotificationDestination extends Model
         ];
     }
 
-    /**
-     * Current secrets of every destination of every account, so the log
-     * redactor can scrub them wherever they appear.
-     *
-     * @return string[]
-     */
-    public static function secretValues(): array
+    protected static function collectSecretValues(): iterable
     {
-        if (self::$secretValues !== null) {
-            return self::$secretValues;
-        }
-
-        $values = [];
         foreach (static::query()->whereNotNull('secrets')->get() as $destination) {
+            $values = [];
             array_walk_recursive($destination->secrets, function ($value) use (&$values) {
-                if (is_string($value) && $value !== '') {
-                    $values[] = $value;
-                }
+                $values[] = $value;
             });
+            yield from $values;
         }
-
-        return self::$secretValues = array_values(array_unique($values));
-    }
-
-    public static function flushSecretCache(): void
-    {
-        self::$secretValues = null;
     }
 
     /**

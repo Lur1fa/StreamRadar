@@ -2,6 +2,8 @@
 
 namespace App\Services\Http;
 
+use App\Support\Brand;
+use App\Support\Url;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
@@ -52,9 +54,7 @@ class SafeHttpClient
             throw new UnsafeUrlException('The request method is not allowed.');
         }
 
-        if (! empty($options['query'])) {
-            $url .= (str_contains($url, '?') ? '&' : '?').http_build_query($options['query'], '', '&', PHP_QUERY_RFC3986);
-        }
+        $url = Url::withQuery($url, $options['query'] ?? []);
 
         $validated = $this->guard->validate(
             $url,
@@ -91,7 +91,7 @@ class SafeHttpClient
         return Http::withoutRedirecting()
             ->connectTimeout((int) config('security.webhook.connect_timeout', 5))
             ->timeout((int) config('security.webhook.timeout', 10))
-            ->withUserAgent('StreamRadar/1.0 (+https://github.com/stmn/StreamRadar)')
+            ->withUserAgent(Brand::USER_AGENT)
             ->withOptions([
                 'curl' => [CURLOPT_RESOLVE => self::resolveEntries($validated)],
                 'protocols' => ['http', 'https'],

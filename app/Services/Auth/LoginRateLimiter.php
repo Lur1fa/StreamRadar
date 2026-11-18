@@ -56,11 +56,6 @@ class LoginRateLimiter
         Cache::forget($this->lockKey($identifier));
     }
 
-    public function attempts(string $identifier): int
-    {
-        return (int) Cache::get($this->attemptsKey($identifier), 0);
-    }
-
     private function ipKey(string $ip): string
     {
         return 'login:ip:'.sha1($ip);

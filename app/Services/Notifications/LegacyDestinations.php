@@ -3,8 +3,7 @@
 namespace App\Services\Notifications;
 
 use App\Models\NotificationDestination;
-use Illuminate\Contracts\Encryption\DecryptException;
-use Illuminate\Support\Facades\Crypt;
+use App\Support\Secrets;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -43,13 +42,12 @@ final class LegacyDestinations
             return (string) $stored;
         }
 
-        try {
-            return Crypt::decryptString((string) $stored);
-        } catch (DecryptException) {
+        $plain = Secrets::tryDecrypt((string) $stored);
+        if ($plain === null) {
             Log::warning("The old setting [{$key}] could not be decrypted (APP_KEY changed?), so it was not turned into a destination.");
-
-            return null;
         }
+
+        return $plain;
     }
 
     /**
@@ -105,7 +103,7 @@ final class LegacyDestinations
                 ->contains(fn (NotificationDestination $d) => ($d->config['to'] ?? null) === $to);
 
             if (! $exists) {
-                $create(DestinationType::Email, 'Email', $enabled('email'), ['to' => $to, 'subject_prefix' => '']);
+                $create(DestinationType::Email, 'Email', $enabled('email'), ['to' => $to] + DestinationType::Email->defaultConfig());
             }
         }
 
@@ -121,15 +119,13 @@ final class LegacyDestinations
             $ntfy = ($values['webhook_format'] ?? 'json') === 'ntfy' ? self::splitNtfyUrl($url) : null;
 
             if ($ntfy !== null) {
-                $create(DestinationType::Ntfy, "ntfy · {$ntfy['topic']}", $enabled('webhook'), $ntfy + ['username' => '', 'title_prefix' => '']);
+                $create(DestinationType::Ntfy, "ntfy · {$ntfy['topic']}", $enabled('webhook'), $ntfy + DestinationType::Ntfy->defaultConfig());
 
                 // Rules that went to the ntfy-formatted webhook now go to ntfy.
                 DB::table('alert_rules')->where('owner_id', $ownerId)->where('notify_webhook', true)
                     ->update(['notify_ntfy' => true, 'notify_webhook' => false]);
             } else {
-                $create(DestinationType::Webhook, 'Webhook', $enabled('webhook'),
-                    ['method' => 'POST', 'auth' => 'none', 'auth_username' => '', 'headers' => [], 'query' => []],
-                    ['url' => $url]);
+                $create(DestinationType::Webhook, 'Webhook', $enabled('webhook'), DestinationType::Webhook->defaultConfig(), ['url' => $url]);
             }
         }
 
@@ -153,7 +149,7 @@ final class LegacyDestinations
         $segments = array_values(array_filter(explode('/', $parts['path'] ?? ''), fn (string $s) => $s !== ''));
         $topic = array_pop($segments);
 
-        if ($topic === null || ! preg_match('/^[A-Za-z0-9_\-]{1,64}$/', $topic)) {
+        if ($topic === null || ! preg_match(DestinationType::NTFY_TOPIC, $topic)) {
             return null;
         }
 

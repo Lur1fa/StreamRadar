@@ -3,6 +3,7 @@
 namespace Database\Factories;
 
 use App\Models\AlertRule;
+use App\Services\Notifications\DestinationType;
 use Database\Factories\Concerns\HasOwner;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
@@ -25,11 +26,7 @@ class AlertRuleFactory extends Factory
             'min_viewers' => null,
             'language' => null,
             'keywords' => null,
-            'notify_email' => false,
-            'notify_discord' => false,
-            'notify_telegram' => false,
-            'notify_webhook' => false,
-            'notify_ntfy' => false,
+            ...array_fill_keys(DestinationType::ruleFlags(), false),
             'notify_on_category_change' => false,
             'notify_on_stream_start' => true,
             'is_active' => true,

@@ -17,7 +17,7 @@ class AccountController extends Controller
         return Inertia::render('Account', [
             'account' => $request->user()->toPublicArray(),
             'provider' => $request->session()->get('auth.provider', 'local'),
-            'passwordMinLength' => (int) config('security.password_min_length', 12),
+            'passwordMinLength' => (int) config('security.password_min_length'),
         ]);
     }
 
@@ -35,7 +35,7 @@ class AccountController extends Controller
 
         $data = $request->validate([
             'current_password' => ['required', 'string'],
-            'password' => ['required', 'string', 'confirmed', Password::min((int) config('security.password_min_length', 12))],
+            'password' => ['required', 'string', 'confirmed', Password::defaults()],
         ]);
 
         if (! Hash::check($data['current_password'], $user->password)) {

@@ -41,12 +41,13 @@ class AppServiceProvider extends ServiceProvider
 
         Password::defaults(fn () => Password::min((int) config('security.password_min_length', 12)));
 
-        RateLimiter::for('login', fn (Request $request) => Limit::perMinute(30)->by((string) $request->ip()));
-        RateLimiter::for('setup', fn (Request $request) => Limit::perMinute(10)->by((string) $request->ip()));
-        RateLimiter::for('oidc', fn (Request $request) => Limit::perMinute(30)->by((string) $request->ip()));
-        RateLimiter::for('sync', fn (Request $request) => Limit::perMinute(4)->by((string) $request->user()?->id ?: $request->ip()));
-        RateLimiter::for('twitch-search', fn (Request $request) => Limit::perMinute(60)->by((string) $request->user()?->id ?: $request->ip()));
-        RateLimiter::for('settings-tests', fn (Request $request) => Limit::perMinute(10)->by((string) $request->user()?->id ?: $request->ip()));
+        // Requests per minute. Before sign-in per client IP, afterwards per account.
+        foreach (['login' => 30, 'setup' => 10, 'oidc' => 30] as $name => $perMinute) {
+            RateLimiter::for($name, fn (Request $request) => Limit::perMinute($perMinute)->by((string) $request->ip()));
+        }
+        foreach (['sync' => 4, 'twitch-search' => 60, 'settings-tests' => 10] as $name => $perMinute) {
+            RateLimiter::for($name, fn (Request $request) => Limit::perMinute($perMinute)->by((string) ($request->user()?->id ?: $request->ip())));
+        }
     }
 
     /**

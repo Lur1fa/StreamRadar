@@ -2,6 +2,7 @@
 
 namespace App\Services\Notifications;
 
+use App\Support\Text;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -50,7 +51,7 @@ class DeliveryFailed extends RuntimeException
             $text = $response->body();
         }
 
-        $text = trim((string) preg_replace('/[\x00-\x1F\x7F]+/', ' ', (string) $text));
+        $text = Text::stripControlChars((string) $text);
 
         return $text === '' ? null : Str::limit($text, 160, '…');
     }

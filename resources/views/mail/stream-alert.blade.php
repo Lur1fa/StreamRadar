@@ -1,7 +1,8 @@
 {{-- All variables are plain strings; Blade's {{ }} HTML-escapes every one of them. --}}
+@php($brand = \App\Support\Brand::COLOR)
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; background: #f9fafb; padding: 24px;">
     <div style="text-align: center; margin-bottom: 24px;">
-        <div style="display: inline-block; background: linear-gradient(135deg, #9147ff, #6366f1); padding: 10px 16px; border-radius: 12px;">
+        <div style="display: inline-block; background: linear-gradient(135deg, {{ $brand }}, #6366f1); padding: 10px 16px; border-radius: 12px;">
             <span style="color: white; font-size: 18px; font-weight: bold;">StreamRadar</span>
         </div>
     </div>
@@ -12,7 +13,7 @@
 
 @foreach ($entries as $entry)
     <div style="background: white; border-radius: 12px; overflow: hidden; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
-        <div style="background: linear-gradient(135deg, #9147ff, #6366f1); padding: 12px 16px;">
+        <div style="background: linear-gradient(135deg, {{ $brand }}, #6366f1); padding: 12px 16px;">
             <table cellpadding="0" cellspacing="0" border="0"><tr>
                 <td>
                     @if ($entry['avatar'])
@@ -36,7 +37,7 @@
             <table cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 12px;">
                 <tr>
                     <td style="padding-right: 16px;">
-                        <span style="color: #9147ff; font-weight: 600; font-size: 13px;">
+                        <span style="color: {{ $brand }}; font-weight: 600; font-size: 13px;">
                             @if ($entry['category_box_art'])
                                 <img src="{{ $entry['category_box_art'] }}" width="16" height="21" style="vertical-align: middle; margin-right: 4px; border-radius: 2px;" alt="" />
                             @endif
@@ -51,7 +52,7 @@
                     </td>
                 </tr>
             </table>
-            <a href="{{ $entry['url'] }}" style="display: inline-block; padding: 10px 24px; background: #9147ff; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">Watch on Twitch →</a>
+            <a href="{{ $entry['url'] }}" style="display: inline-block; padding: 10px 24px; background: {{ $brand }}; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">Watch on Twitch →</a>
             <p style="margin: 12px 0 0; color: #9ca3af; font-size: 11px;">Alert: {{ $entry['rules'] }}</p>
         </div>
     </div>

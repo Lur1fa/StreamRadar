@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\HistoryEvent;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -16,7 +17,7 @@ class HistoryController extends Controller
         if ($request->filled('type')) {
             $query->ofType($request->input('type'));
         } else {
-            $query->where('type', '!=', 'sync_completed');
+            $query->where('type', '!=', HistoryEvent::SYNC_COMPLETED);
         }
 
         if ($request->filled('search')) {
@@ -38,7 +39,7 @@ class HistoryController extends Controller
         ]);
     }
 
-    public function clear(Request $request): \Illuminate\Http\RedirectResponse
+    public function clear(Request $request): RedirectResponse
     {
         HistoryEvent::ownedBy($request->user())->delete();
 

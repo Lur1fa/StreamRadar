@@ -2,26 +2,26 @@
 
 namespace App\Console\Commands;
 
-use App\Models\User;
+use App\Console\Commands\Concerns\ManagesAccounts;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
 class UserDeleteCommand extends Command
 {
+    use ManagesAccounts;
+
     protected $signature = 'user:delete {email : E-mail of the account} {--force : Skip confirmation}';
 
     protected $description = 'Delete a user account';
 
     public function handle(): int
     {
-        $user = User::findByEmail($this->argument('email'));
+        $user = $this->accountOrFail((string) $this->argument('email'));
         if (! $user) {
-            $this->error('No account with that e-mail address.');
-
             return self::FAILURE;
         }
 
-        if ($user->isAdmin() && User::admins()->active()->where('id', '!=', $user->id)->doesntExist()) {
+        if ($user->isLastActiveAdmin()) {
             $this->error('Refusing to delete the last administrator.');
 
             return self::FAILURE;
@@ -32,7 +32,7 @@ class UserDeleteCommand extends Command
         }
 
         DB::transaction(function () use ($user) {
-            DB::table('sessions')->where('user_id', $user->id)->delete();
+            $user->endAllSessions();
             $user->delete();
         });
 

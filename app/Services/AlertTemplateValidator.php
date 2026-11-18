@@ -6,9 +6,18 @@ use Illuminate\Validation\ValidationException;
 
 class AlertTemplateValidator
 {
-    public const FIELDS = [
-        'streamer_name', 'streamer_login', 'title', 'category', 'viewers',
-        'language', 'url', 'alert_names', 'tags', 'started_at',
+    /** The fields a template can use, with the label the template builder shows. */
+    public const FIELD_LABELS = [
+        'streamer_name' => 'Streamer name',
+        'streamer_login' => 'Streamer login',
+        'title' => 'Title',
+        'category' => 'Category',
+        'viewers' => 'Viewers',
+        'language' => 'Language',
+        'url' => 'Twitch URL',
+        'alert_names' => 'Alert name',
+        'tags' => 'Tags',
+        'started_at' => 'Start time',
     ];
 
     public function validate(?array $template): ?array
@@ -30,7 +39,7 @@ class AlertTemplateValidator
                 throw ValidationException::withMessages(["notification_template.blocks.{$index}" => 'Each block must be text or field.']);
             }
 
-            if ($block['type'] === 'field' && ! in_array($block['field'] ?? null, self::FIELDS, true)) {
+            if ($block['type'] === 'field' && (! is_string($block['field'] ?? null) || ! array_key_exists($block['field'], self::FIELD_LABELS))) {
                 throw ValidationException::withMessages(["notification_template.blocks.{$index}.field" => 'This alert field is not supported.']);
             }
 

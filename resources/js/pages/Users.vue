@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
-import { router, useForm, usePage } from '@inertiajs/vue3';
+import { ref } from 'vue';
+import { router, useForm } from '@inertiajs/vue3';
 import { Users as UsersIcon, Plus, Trash2, ShieldCheck, Ban, KeyRound, X } from 'lucide-vue-next';
 import AppLayout from '@/layouts/AppLayout.vue';
 import ConfirmModal from '@/components/ConfirmModal.vue';
 import { useAuth } from '@/composables/useAuth';
+import { usePageErrors } from '@/composables/usePageErrors';
+import { formatDate } from '@/utils';
 import type { AuthUser, Role } from '@/types';
 
 const props = defineProps<{
@@ -14,8 +16,7 @@ const props = defineProps<{
     sso: { enabled: boolean; autoProvision: boolean; passwordOptional: boolean };
 }>();
 
-const page = usePage();
-const errors = computed(() => (page.props.errors ?? {}) as Record<string, string>);
+const errors = usePageErrors();
 const { user: me } = useAuth();
 
 const showForm = ref(false);
@@ -53,10 +54,6 @@ const deleting = ref<AuthUser | null>(null);
 function confirmDelete() {
     if (!deleting.value) return;
     router.delete(`/users/${deleting.value.id}`, { preserveScroll: true, onSuccess: () => { deleting.value = null; } });
-}
-
-function formatDate(iso: string | null): string {
-    return iso ? new Date(iso).toLocaleString() : 'never';
 }
 </script>
 
@@ -130,7 +127,7 @@ function formatDate(iso: string | null): string {
                                 <span v-else-if="!u.has_password" class="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400" v-tooltip="'No password. Becomes usable on first SSO sign-in with this e-mail.'">awaiting SSO</span>
                                 <span v-if="u.disabled" class="text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-300">disabled</span>
                             </div>
-                            <div class="text-xs text-gray-500 dark:text-zinc-500 truncate">{{ u.email }} · last login {{ formatDate(u.last_login_at) }}</div>
+                            <div class="text-xs text-gray-500 dark:text-zinc-500 truncate">{{ u.email }} · last login {{ formatDate(u.last_login_at, undefined, 'never') }}</div>
                         </div>
 
                         <select :value="u.role" @change="setRole(u, ($event.target as HTMLSelectElement).value as Role)" :disabled="u.id === me?.id"

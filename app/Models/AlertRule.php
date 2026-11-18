@@ -3,6 +3,8 @@
 namespace App\Models;
 
 use App\Models\Concerns\BelongsToOwner;
+use App\Services\Notifications\DestinationType;
+use App\Support\Text;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -35,6 +37,21 @@ class AlertRule extends Model
         'is_active',
     ];
 
+    /**
+     * Columns in a configuration backup. Categories are exported by Twitch
+     * id instead (see SettingsController::export).
+     *
+     * @return string[]
+     */
+    public static function exportColumns(): array
+    {
+        return [
+            'name', 'streamer_login', 'category_tags', 'match_mode', 'min_viewers', 'min_avg_viewers', 'language', 'keywords',
+            ...DestinationType::ruleFlags(),
+            'notify_on_category_change', 'notify_on_stream_start', 'notification_template', 'is_active',
+        ];
+    }
+
     protected function casts(): array
     {
         return [
@@ -43,11 +60,7 @@ class AlertRule extends Model
             'keywords' => 'array',
             'category_ids' => 'array',
             'category_tags' => 'array',
-            'notify_email' => 'boolean',
-            'notify_discord' => 'boolean',
-            'notify_telegram' => 'boolean',
-            'notify_webhook' => 'boolean',
-            'notify_ntfy' => 'boolean',
+            ...array_fill_keys(DestinationType::ruleFlags(), 'boolean'),
             'notify_on_category_change' => 'boolean',
             'notify_on_stream_start' => 'boolean',
             'is_active' => 'boolean',
@@ -115,18 +128,8 @@ class AlertRule extends Model
             return false;
         }
 
-        if (! empty($this->keywords)) {
-            $titleLower = strtolower($stream->title);
-            $matched = false;
-            foreach ($this->keywords as $keyword) {
-                if (str_contains($titleLower, strtolower($keyword))) {
-                    $matched = true;
-                    break;
-                }
-            }
-            if (! $matched) {
-                return false;
-            }
+        if (! empty($this->keywords) && ! Text::containsAny((string) $stream->title, $this->keywords)) {
+            return false;
         }
 
         return true;

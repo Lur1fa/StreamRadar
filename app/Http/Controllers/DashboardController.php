@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Stream;
 use App\Models\TrackedChannel;
+use App\Support\Twitch;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -18,9 +19,9 @@ class DashboardController extends Controller
         $query = Stream::with('category')
             ->ownedBy($user)
             ->whereNull('missing_since')
-            ->where('thumbnail_url', 'not like', '%ttv-static/404_preview%')
+            ->where('thumbnail_url', 'not like', '%'.Twitch::OFFLINE_THUMBNAIL_MARKER.'%')
             ->where(function ($q) use ($trackedLogins) {
-                $q->whereHas('category', fn ($c) => $c->where('is_active', true));
+                $q->forActiveCategories();
                 if (! empty($trackedLogins)) {
                     $q->orWhereIn('user_login', $trackedLogins);
                 }

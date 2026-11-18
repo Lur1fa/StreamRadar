@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Stream;
+use App\Services\Notifications\AlertPresenter;
 
 class AlertTemplateRenderer
 {
@@ -11,7 +12,7 @@ class AlertTemplateRenderer
     public function render(?array $template, Stream $stream, array $entry, string $channel = 'plain'): string
     {
         $template = $this->validator->validate($template);
-        $category = $stream->game_name ?? $stream->category?->name ?? 'Unknown';
+        $category = AlertPresenter::category($stream);
         $tags = $stream->tags ? implode(', ', $stream->tags) : '';
         $rules = implode(', ', $entry['rules'] ?? [$entry['rule']->name]);
 

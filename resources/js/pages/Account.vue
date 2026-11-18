@@ -1,14 +1,13 @@
 <script setup lang="ts">
-import { useForm, usePage } from '@inertiajs/vue3';
-import { computed } from 'vue';
+import { useForm } from '@inertiajs/vue3';
 import { UserCircle, KeyRound } from 'lucide-vue-next';
 import AppLayout from '@/layouts/AppLayout.vue';
+import { usePageErrors } from '@/composables/usePageErrors';
 import type { AuthUser } from '@/types';
 
 const props = defineProps<{ account: AuthUser; provider: string; passwordMinLength: number }>();
 
-const page = usePage();
-const errors = computed(() => (page.props.errors ?? {}) as Record<string, string>);
+const errors = usePageErrors();
 
 const form = useForm({
     current_password: '',

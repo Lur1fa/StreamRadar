@@ -22,6 +22,11 @@
     --color-twitch: oklch(0.62 0.21 290);
 }
 
+/* Soft purple accent: selected tabs, filters and sort buttons, and tag badges. */
+@utility accent-soft {
+    @apply bg-purple-50 text-purple-600 dark:bg-purple-500/10 dark:text-purple-400;
+}
+
 /* Borderless inputs and selects */
 input[type="text"],
 input[type="number"],

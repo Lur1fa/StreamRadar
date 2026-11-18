@@ -2,10 +2,11 @@
 
 use App\Models\Setting;
 
-test('seeds default settings', function () {
+test('a fresh installation scans every 5 minutes without seeding anything', function () {
     $this->artisan('app:setup')->assertSuccessful();
 
-    expect(Setting::get('sync_frequency_minutes'))->toBe('5');
+    expect(Setting::get('sync_frequency_minutes'))->toBeNull()
+        ->and(Setting::syncFrequencyMinutes())->toBe(5);
 });
 
 test('does not overwrite existing settings', function () {
@@ -13,5 +14,6 @@ test('does not overwrite existing settings', function () {
 
     $this->artisan('app:setup')->assertSuccessful();
 
-    expect(Setting::get('sync_frequency_minutes'))->toBe('15');
+    expect(Setting::get('sync_frequency_minutes'))->toBe('15')
+        ->and(Setting::syncFrequencyMinutes())->toBe(15);
 });

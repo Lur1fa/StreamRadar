@@ -10,6 +10,9 @@ class TagFilter extends Model
 {
     use BelongsToOwner, HasFactory;
 
+    /** Columns in a configuration backup. */
+    public const EXPORT_COLUMNS = ['tag', 'min_viewers', 'min_avg_viewers', 'languages', 'keywords'];
+
     protected $fillable = [
         'tag',
         'min_viewers',

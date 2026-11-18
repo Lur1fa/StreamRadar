@@ -4,82 +4,72 @@ namespace App\Http\Controllers;
 
 use App\Models\BlacklistRule;
 use App\Models\Stream;
-use App\Services\TwitchApiService;
+use App\Services\TwitchUserLookup;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class BlacklistController extends Controller
 {
+    /** Blacklist page tab of each rule type. */
+    private const TABS = [
+        BlacklistRule::CHANNEL => 'channels',
+        BlacklistRule::KEYWORD => 'keywords',
+        BlacklistRule::TAG => 'tags',
+    ];
+
     public function index(Request $request): Response
     {
-        $tab = $request->input('tab', 'channels');
-
         $user = $request->user();
-        $channels = BlacklistRule::ownedBy($user)->channels()->orderByDesc('created_at')->get();
-        $keywords = BlacklistRule::ownedBy($user)->keywords()->orderByDesc('created_at')->get();
-        $tags = BlacklistRule::ownedBy($user)->tags()->orderByDesc('created_at')->get();
 
         return Inertia::render('Blacklist', [
-            'channels' => $channels,
-            'keywords' => $keywords,
-            'tags' => $tags,
-            'tab' => $tab,
+            'channels' => BlacklistRule::ownedBy($user)->channels()->orderByDesc('created_at')->get(),
+            'keywords' => BlacklistRule::ownedBy($user)->keywords()->orderByDesc('created_at')->get(),
+            'tags' => BlacklistRule::ownedBy($user)->tags()->orderByDesc('created_at')->get(),
+            'tab' => $request->input('tab', 'channels'),
         ]);
     }
 
-    public function store(Request $request, TwitchApiService $twitch): \Illuminate\Http\RedirectResponse
+    public function store(Request $request, TwitchUserLookup $lookup): RedirectResponse
     {
         $validated = $request->validate([
-            'type' => 'required|in:channel,keyword,tag',
+            'type' => ['required', Rule::in(BlacklistRule::TYPES)],
             'value' => 'required|string|max:255',
         ]);
 
-
-        $value = $validated['type'] === 'channel' ? strtolower($validated['value']) : $validated['value'];
+        $type = $validated['type'];
+        $value = $type === BlacklistRule::CHANNEL ? strtolower($validated['value']) : $validated['value'];
         $extra = [];
 
-        // Fetch Twitch data for channels
-        if ($validated['type'] === 'channel' && $twitch->isConfigured()) {
-            try {
-                $users = $twitch->getUsers([$value]);
-                if (! empty($users)) {
-                    $extra['twitch_user_id'] = $users[0]['id'];
-                    $extra['profile_image_url'] = $users[0]['profile_image_url'] ?? null;
-                    $value = strtolower($users[0]['login']);
-                }
-            } catch (\Exception $e) {
-                // Continue without Twitch data
-            }
+        // Channels get their Twitch id and avatar when Twitch knows them.
+        if ($type === BlacklistRule::CHANNEL && ($user = $lookup->tryFind($value))) {
+            $extra = ['twitch_user_id' => $user['id'], 'profile_image_url' => $user['profile_image_url']];
+            $value = $user['login'];
         }
 
-        $user = $request->user();
-
-        BlacklistRule::updateOrCreateFor(
-            $user,
-            ['type' => $validated['type'], 'value' => $value],
-            $extra,
-        );
+        $owner = $request->user();
+        BlacklistRule::updateOrCreateFor($owner, ['type' => $type, 'value' => $value], $extra);
 
         // Remove this account's existing streams matching the blacklist rule
-        match ($validated['type']) {
-            'channel' => Stream::ownedBy($user)->where('user_login', $value)->delete(),
-            'keyword' => Stream::ownedBy($user)->where('title', 'like', '%'.strtolower($value).'%')->delete(),
-            'tag' => Stream::ownedBy($user)->whereJsonContains('tags', $value)->delete(),
+        match ($type) {
+            BlacklistRule::CHANNEL => Stream::ownedBy($owner)->where('user_login', $value)->delete(),
+            BlacklistRule::KEYWORD => Stream::ownedBy($owner)->where('title', 'like', '%'.strtolower($value).'%')->delete(),
+            BlacklistRule::TAG => Stream::ownedBy($owner)->whereJsonContains('tags', $value)->delete(),
         };
 
-        // If called from blacklist page, redirect to correct tab; otherwise stay on current page
-        $referer = $request->headers->get('referer', '');
-        if (str_contains($referer, '/blacklist')) {
-            $tabMap = ['channel' => 'channels', 'keyword' => 'keywords', 'tag' => 'tags'];
-            return redirect()->route('blacklist.index', ['tab' => $tabMap[$validated['type']]])
-                ->with('success', "Added \"{$value}\" to blacklist.");
+        $message = "Added \"{$value}\" to blacklist.";
+
+        // From the blacklist page, go to the rule's tab; otherwise stay on the current page.
+        if (str_contains($request->headers->get('referer', ''), '/blacklist')) {
+            return redirect()->route('blacklist.index', ['tab' => self::TABS[$type]])->with('success', $message);
         }
 
-        return back()->with('success', "Added \"{$value}\" to blacklist.");
+        return back()->with('success', $message);
     }
 
-    public function destroy(BlacklistRule $blacklist): \Illuminate\Http\RedirectResponse
+    public function destroy(BlacklistRule $blacklist): RedirectResponse
     {
         $blacklist->delete();
 

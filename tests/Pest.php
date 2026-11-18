@@ -4,6 +4,7 @@ use App\Models\NotificationDestination;
 use App\Models\User;
 use App\Models\UserSetting;
 use App\Services\Http\OutboundUrlGuard;
+use Database\Factories\Concerns\DefaultOwner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -28,7 +29,7 @@ uses()->beforeEach(function () {
  */
 function testOwner(): User
 {
-    return auth()->user() ?? User::query()->orderBy('id')->first() ?? User::factory()->create();
+    return User::findOrFail(DefaultOwner::id());
 }
 
 /** A setting of one account (default filters, appearance, alert destinations). */

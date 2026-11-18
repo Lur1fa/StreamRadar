@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { useForm, usePage } from '@inertiajs/vue3';
-import { Radar, ShieldCheck, Terminal } from 'lucide-vue-next';
-import { computed } from 'vue';
+import { useForm } from '@inertiajs/vue3';
+import { ShieldCheck, Terminal } from 'lucide-vue-next';
+import AuthLayout from '@/layouts/AuthLayout.vue';
+import { usePageErrors } from '@/composables/usePageErrors';
 
 defineProps<{ tokenActive: boolean; ttlMinutes: number }>();
 
-const page = usePage();
-const errors = computed(() => (page.props.errors ?? {}) as Record<string, string>);
+const errors = usePageErrors();
 
 const form = useForm({
     setup_token: '',
@@ -24,16 +24,7 @@ function submit() {
 </script>
 
 <template>
-    <div class="min-h-screen bg-gray-50 dark:bg-zinc-950 flex items-center justify-center px-4 py-10">
-        <div class="w-full max-w-md">
-            <div class="text-center mb-8">
-                <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center mx-auto mb-4">
-                    <Radar class="w-7 h-7 text-white" :stroke-width="2" />
-                </div>
-                <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Welcome to StreamRadar</h1>
-                <p class="text-sm text-gray-500 dark:text-zinc-500 mt-1">Create the first administrator account</p>
-            </div>
-
+    <AuthLayout title="Welcome to StreamRadar" subtitle="Create the first administrator account" wide>
             <form @submit.prevent="submit" class="bg-white dark:bg-zinc-900 rounded-xl p-6 shadow-sm dark:shadow-none space-y-4">
                 <div class="flex items-start gap-2 text-xs text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800/60 rounded-lg p-3">
                     <Terminal class="w-4 h-4 mt-0.5 shrink-0 text-purple-500" />
@@ -83,6 +74,5 @@ function submit() {
                     Create administrator
                 </button>
             </form>
-        </div>
-    </div>
+    </AuthLayout>
 </template>

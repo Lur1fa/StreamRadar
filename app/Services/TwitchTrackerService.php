@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\ChannelStats;
+use App\Support\Brand;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -15,13 +16,9 @@ class TwitchTrackerService
      */
     public function getAvgViewers(string $userLogin): ?int
     {
-        $stats = ChannelStats::where('user_login', strtolower($userLogin))->first();
+        $login = strtolower($userLogin);
 
-        if ($stats && $stats->fetched_at && $stats->fetched_at->diffInHours(now()) < self::CACHE_HOURS) {
-            return $stats->avg_viewers;
-        }
-
-        return $this->fetchAndCache(strtolower($userLogin), $stats);
+        return $this->getAvgViewersBulk([$login])[$login] ?? null;
     }
 
     /**
@@ -36,33 +33,30 @@ class TwitchTrackerService
 
         foreach ($logins as $login) {
             $stats = $existing->get($login);
-            if ($stats && $stats->fetched_at && $stats->fetched_at->diffInHours(now()) < self::CACHE_HOURS) {
-                $result[$login] = $stats->avg_viewers;
-            } else {
-                $result[$login] = $this->fetchAndCache($login, $stats);
-            }
+            $result[$login] = self::isFresh($stats) ? $stats->avg_viewers : $this->fetchAndCache($login, $stats);
         }
 
         return $result;
+    }
+
+    private static function isFresh(?ChannelStats $stats): bool
+    {
+        return $stats?->fetched_at !== null && $stats->fetched_at->diffInHours(now()) < self::CACHE_HOURS;
     }
 
     private function fetchAndCache(string $login, ?ChannelStats $stats): ?int
     {
         try {
             $response = Http::timeout(5)
-                ->withHeaders(['User-Agent' => 'StreamRadar/1.0'])
-                ->get("https://twitchtracker.com/api/channels/summary/{$login}");
+                ->withUserAgent(Brand::USER_AGENT)
+                ->get('https://twitchtracker.com/api/channels/summary/'.rawurlencode($login));
 
             if (! $response->successful()) {
                 return $stats?->avg_viewers;
             }
 
-            $data = $response->json();
-            $avgViewers = $data['avg_viewers'] ?? null;
-
-            if ($avgViewers !== null) {
-                $avgViewers = (int) $avgViewers;
-            }
+            $avgViewers = $response->json('avg_viewers');
+            $avgViewers = $avgViewers !== null ? (int) $avgViewers : null;
 
             ChannelStats::updateOrCreate(
                 ['user_login' => $login],

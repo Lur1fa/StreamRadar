@@ -15,6 +15,9 @@ use App\Models\User;
 use App\Rules\SafeWebhookUrl;
 use App\Services\Notifications\DestinationType;
 use App\Services\Notifications\LegacyDestinations;
+use App\Support\SettingValue;
+use App\Support\Text;
+use App\Support\Twitch;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
@@ -70,7 +73,7 @@ class ConfigImportService
             }
 
             foreach ($validated['blacklist'] ?? [] as $rule) {
-                $value = $rule['type'] === 'channel' ? strtolower($rule['value']) : $rule['value'];
+                $value = $rule['type'] === BlacklistRule::CHANNEL ? strtolower($rule['value']) : $rule['value'];
                 BlacklistRule::updateOrCreateFor($owner, ['type' => $rule['type'], 'value' => $value], collect($rule)->except(['type', 'value'])->toArray());
                 $counts['blacklist']++;
             }
@@ -128,7 +131,7 @@ class ConfigImportService
         }
 
         $max = self::MAX_ITEMS;
-        $login = 'regex:/^[A-Za-z0-9_]{1,64}$/';
+        $login = 'regex:'.Twitch::LOGIN_PATTERN;
         $stringList = ['nullable', 'array', 'max:200'];
 
         $rules = [
@@ -158,7 +161,7 @@ class ConfigImportService
             'channels.*.is_active' => ['sometimes', 'boolean'],
 
             'blacklist' => ['sometimes', 'array', "max:{$max}"],
-            'blacklist.*.type' => ['required', 'in:channel,keyword,tag'],
+            'blacklist.*.type' => ['required', Rule::in(BlacklistRule::TYPES)],
             'blacklist.*.value' => ['required', 'string', 'max:255'],
             'blacklist.*.twitch_user_id' => ['nullable', 'string', 'max:64'],
             'blacklist.*.profile_image_url' => ['nullable', 'string', 'max:1000', 'starts_with:https://'],
@@ -186,18 +189,14 @@ class ConfigImportService
             'alerts.*.language' => ['nullable', 'string', 'max:10'],
             'alerts.*.keywords' => $stringList,
             'alerts.*.keywords.*' => ['string', 'max:100'],
-            'alerts.*.notify_email' => ['sometimes', 'boolean'],
-            'alerts.*.notify_discord' => ['sometimes', 'boolean'],
-            'alerts.*.notify_telegram' => ['sometimes', 'boolean'],
-            'alerts.*.notify_webhook' => ['sometimes', 'boolean'],
-            'alerts.*.notify_ntfy' => ['sometimes', 'boolean'],
+            ...collect(DestinationType::ruleFlags())->mapWithKeys(fn (string $flag) => ["alerts.*.{$flag}" => ['sometimes', 'boolean']])->all(),
             'alerts.*.notify_on_category_change' => ['sometimes', 'boolean'],
             'alerts.*.notify_on_stream_start' => ['sometimes', 'boolean'],
             'alerts.*.is_active' => ['sometimes', 'boolean'],
             'alerts.*.notification_template' => ['nullable', 'array'],
 
             'destinations' => ['sometimes', 'array', 'max:100'],
-            'destinations.*.name' => ['required', 'string', 'max:100', 'regex:/^[^\x00-\x1F\x7F]*$/'],
+            'destinations.*.name' => ['required', 'string', 'max:100', Text::PRINTABLE_RULE],
             'destinations.*.type' => ['required', Rule::enum(DestinationType::class)],
             'destinations.*.enabled' => ['sometimes', 'boolean'],
             'destinations.*.config' => ['nullable', 'array'],
@@ -268,18 +267,11 @@ class ConfigImportService
             throw ValidationException::withMessages(['destinations' => 'Destination "'.$destination['name'].'": '.$validator->errors()->first()]);
         }
 
-        foreach ($type->configKeys() as $key) {
-            $value = $config[$key] ?? null;
-            $config[$key] = in_array($key, ['headers', 'query'], true)
-                ? array_values(array_filter((array) $value, 'is_string'))
-                : (is_scalar($value) ? (string) $value : '');
-        }
-
         return [
             'name' => $destination['name'],
             'type' => $type->value,
             'enabled' => (bool) ($destination['enabled'] ?? true),
-            'config' => $config,
+            'config' => $type->normalizeConfig($config),
         ];
     }
 
@@ -306,8 +298,8 @@ class ConfigImportService
         $validated = Validator::make($legacy, [
             'mail_to' => ['nullable', 'email:rfc', 'max:255'],
             'discord_webhook_url' => ['nullable', 'string', 'max:2048', SafeWebhookUrl::discord()],
-            'telegram_bot_token' => ['nullable', 'string', 'max:255', 'regex:/^\d{3,}:[A-Za-z0-9_\-]{10,}$/'],
-            'telegram_chat_id' => ['nullable', 'string', 'max:64', 'regex:/^-?\d+$/'],
+            'telegram_bot_token' => ['nullable', 'string', 'max:255', 'regex:'.DestinationType::TELEGRAM_BOT_TOKEN],
+            'telegram_chat_id' => ['nullable', 'string', 'max:64', 'regex:'.DestinationType::TELEGRAM_CHAT_ID],
             'webhook_url' => ['nullable', 'string', 'max:2048', new SafeWebhookUrl],
             'webhook_format' => ['nullable', 'in:json,ntfy'],
             'notifications_email_enabled' => ['nullable', 'boolean'],
@@ -316,10 +308,6 @@ class ConfigImportService
             'notifications_webhook_enabled' => ['nullable', 'boolean'],
         ])->validate();
 
-        return array_map(fn ($value) => match (true) {
-            is_bool($value) => $value ? '1' : '0',
-            $value === null => null,
-            default => (string) $value,
-        }, $validated);
+        return array_map(SettingValue::encode(...), $validated);
     }
 }

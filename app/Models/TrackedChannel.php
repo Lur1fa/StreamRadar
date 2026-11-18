@@ -9,6 +9,10 @@ use Illuminate\Database\Eloquent\Model;
 class TrackedChannel extends Model
 {
     use BelongsToOwner, HasFactory;
+
+    /** Columns in a configuration backup. */
+    public const EXPORT_COLUMNS = ['twitch_user_id', 'user_login', 'user_name', 'profile_image_url', 'is_active'];
+
     protected $fillable = [
         'twitch_user_id',
         'user_login',

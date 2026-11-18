@@ -2,7 +2,6 @@
 
 namespace Database\Factories\Concerns;
 
-use App\Models\User;
 use Closure;
 
 /**
@@ -15,8 +14,6 @@ trait HasOwner
 {
     protected function defaultOwner(): Closure
     {
-        return fn () => auth()->id()
-            ?? User::query()->orderBy('id')->value('id')
-            ?? User::factory()->create()->id;
+        return fn () => DefaultOwner::id();
     }
 }

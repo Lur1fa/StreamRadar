@@ -88,8 +88,7 @@ class AccountDataService
                 DB::table('settings')->whereIn('key', LegacyDestinations::KEYS)->delete();
             }
 
-            UserSetting::flushSecretCache();
-            NotificationDestination::flushSecretCache();
+            self::flushSecretCaches();
 
             return $counts;
         });
@@ -156,8 +155,7 @@ class AccountDataService
             DB::table('user_settings')->where('user_id', $to->id)->whereIn('key', $keys)->delete();
             $counts['settings'] = DB::table('user_settings')->where('user_id', $from->id)->update(['user_id' => $to->id]);
 
-            UserSetting::flushSecretCache();
-            NotificationDestination::flushSecretCache();
+            self::flushSecretCaches();
 
             return $counts;
         });
@@ -174,9 +172,15 @@ class AccountDataService
             if ($includingSettings) {
                 DB::table('user_settings')->where('user_id', $user->id)->delete();
                 DB::table('notification_destinations')->where('owner_id', $user->id)->delete();
-                UserSetting::flushSecretCache();
-                NotificationDestination::flushSecretCache();
+                self::flushSecretCaches();
             }
         });
+    }
+
+    /** The log redactor keeps decrypted secrets per store; data that moved invalidates both. */
+    private static function flushSecretCaches(): void
+    {
+        UserSetting::flushSecretCache();
+        NotificationDestination::flushSecretCache();
     }
 }

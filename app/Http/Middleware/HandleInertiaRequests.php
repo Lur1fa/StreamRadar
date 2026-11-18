@@ -39,7 +39,7 @@ class HandleInertiaRequests extends Middleware
             'appSettings' => fn () => [
                 'theme' => $user ? UserSetting::get($user, 'theme', 'system') : 'system',
                 'last_sync_at' => $user ? Setting::get('last_sync_at') : null,
-                'sync_frequency_minutes' => (int) Setting::get('sync_frequency_minutes', 5),
+                'sync_frequency_minutes' => Setting::syncFrequencyMinutes(),
             ],
             'flash' => [
                 'success' => $request->session()->get('success'),

@@ -2,22 +2,23 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\CachesSecretValues;
+use App\Support\SettingValue;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
- * Settings of one account (Setting::ACCOUNT_KEYS): default filters,
- * appearance, and where that account's alerts are delivered.
+ * Settings of one account (Setting::ACCOUNT_KEYS): default filters and
+ * appearance.
  *
  * Secrets follow the same rules as in Setting: encrypted at rest, only ever
  * sent to a browser as `<key>_set` / `<key>_masked`, never exported.
  */
 class UserSetting extends Model
 {
-    protected $fillable = ['user_id', 'key', 'value'];
+    use CachesSecretValues;
 
-    /** @var string[]|null Decrypted secrets of all accounts, for log redaction. */
-    private static ?array $secretValues = null;
+    protected $fillable = ['user_id', 'key', 'value'];
 
     public function user(): BelongsTo
     {
@@ -42,31 +43,14 @@ class UserSetting extends Model
             ['value' => Setting::toStorage($key, $value)],
         );
 
-        self::$secretValues = null;
-    }
-
-    /**
-     * @param  array<string, mixed>  $settings
-     */
-    public static function setMany(User|int $user, array $settings): void
-    {
-        foreach ($settings as $key => $value) {
-            static::set($user, $key, $value);
-        }
+        static::flushSecretCache();
     }
 
     public static function forget(User|int $user, string $key): void
     {
         static::where('user_id', self::id($user))->where('key', $key)->delete();
 
-        self::$secretValues = null;
-    }
-
-    public static function has(User|int $user, string $key): bool
-    {
-        $value = static::get($user, $key);
-
-        return $value !== null && $value !== '';
+        static::flushSecretCache();
     }
 
     /**
@@ -85,6 +69,23 @@ class UserSetting extends Model
     }
 
     /**
+     * The account's default stream filters (Settings → Global Filters).
+     *
+     * @return array{min_viewers: int, min_avg_viewers: int, languages: array<int, mixed>, keywords: array<int, mixed>}
+     */
+    public static function defaultFilters(User|int $user): array
+    {
+        $values = static::getMany($user, ['global_min_viewers', 'global_min_avg_viewers', 'global_languages', 'global_keywords'], Setting::DEFAULTS);
+
+        return [
+            'min_viewers' => (int) $values['global_min_viewers'],
+            'min_avg_viewers' => (int) $values['global_min_avg_viewers'],
+            'languages' => SettingValue::decodeList($values['global_languages']),
+            'keywords' => SettingValue::decodeList($values['global_keywords']),
+        ];
+    }
+
+    /**
      * Settings shaped for a browser: plain values for non-secrets, and for
      * every secret only `<key>_set` (bool) and `<key>_masked` (string|null).
      *
@@ -94,49 +95,14 @@ class UserSetting extends Model
      */
     public static function publicView(User|int $user, array $keys, array $defaults = []): array
     {
-        $view = [];
-        foreach ($keys as $key) {
-            $value = static::get($user, $key, $defaults[$key] ?? null);
-
-            if (Setting::isSecret($key)) {
-                $view[$key.'_set'] = $value !== null && $value !== '';
-                $view[$key.'_masked'] = Setting::maskValue($key, $value);
-
-                continue;
-            }
-
-            $view[$key] = $value;
-        }
-
-        return $view;
+        return Setting::browserView($keys, fn (string $key) => static::get($user, $key, $defaults[$key] ?? null));
     }
 
-    /**
-     * Current secrets of every account, so the log redactor can scrub them
-     * wherever they appear.
-     *
-     * @return string[]
-     */
-    public static function secretValues(): array
+    protected static function collectSecretValues(): iterable
     {
-        if (self::$secretValues !== null) {
-            return self::$secretValues;
-        }
-
-        $values = [];
         foreach (static::whereIn('key', Setting::SECRET_KEYS)->whereNotNull('value')->get(['key', 'value']) as $row) {
-            $value = Setting::fromStorage($row->key, $row->value);
-            if (is_string($value) && $value !== '') {
-                $values[] = $value;
-            }
+            yield Setting::fromStorage($row->key, $row->value);
         }
-
-        return self::$secretValues = array_values(array_unique($values));
-    }
-
-    public static function flushSecretCache(): void
-    {
-        self::$secretValues = null;
     }
 
     private static function id(User|int $user): int

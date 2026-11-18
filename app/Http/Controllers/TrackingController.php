@@ -3,15 +3,16 @@
 namespace App\Http\Controllers;
 
 use App\Models\Category;
-use App\Models\Setting;
 use App\Models\Stream;
 use App\Models\TagFilter;
 use App\Models\TrackedChannel;
 use App\Models\UserSetting;
 use App\Services\SyncService;
 use App\Services\TwitchApiService;
+use App\Services\TwitchUserLookup;
 use App\Support\Redactor;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
@@ -35,7 +36,6 @@ class TrackingController extends Controller
         };
 
         $channels = TrackedChannel::ownedBy($user)->orderBy('user_name')->get();
-        $defaults = UserSetting::getMany($user, ['global_min_viewers', 'global_min_avg_viewers', 'global_languages', 'global_keywords'], Setting::DEFAULTS);
 
         return Inertia::render('Tracking', [
             'categories' => $query->get(),
@@ -43,12 +43,7 @@ class TrackingController extends Controller
             'sort' => $sort,
             'tab' => $request->input('tab', 'categories'),
             'tagFilters' => TagFilter::ownedBy($user)->orderBy('tag')->get(),
-            'globalFilters' => [
-                'min_viewers' => (int) $defaults['global_min_viewers'],
-                'min_avg_viewers' => (int) $defaults['global_min_avg_viewers'],
-                'languages' => json_decode((string) $defaults['global_languages'], true) ?: [],
-                'keywords' => json_decode((string) $defaults['global_keywords'], true) ?: [],
-            ],
+            'globalFilters' => UserSetting::defaultFilters($user),
         ]);
     }
 
@@ -57,7 +52,7 @@ class TrackingController extends Controller
         $request->validate(['query' => 'required|string|min:1']);
 
         if (! $twitch->isConfigured()) {
-            return response()->json(['error' => 'Twitch API not configured'], 422);
+            return response()->json(['error' => TwitchApiService::NOT_CONFIGURED], 422);
         }
 
         try {
@@ -98,7 +93,7 @@ class TrackingController extends Controller
         }
     }
 
-    public function storeCategory(Request $request, SyncService $sync, TwitchApiService $twitch): \Illuminate\Http\RedirectResponse
+    public function storeCategory(Request $request, SyncService $sync, TwitchApiService $twitch): RedirectResponse
     {
         $user = $request->user();
 
@@ -115,18 +110,15 @@ class TrackingController extends Controller
             'use_global_filters' => true,
         ]);
 
+        // Show its streams right away; the scheduled sync catches up if this fails.
         if ($twitch->isConfigured()) {
-            try {
-                $sync->syncCategory($category, silentAlerts: true);
-            } catch (\Exception $e) {
-                // Sync will catch up later
-            }
+            rescue(fn () => $sync->syncCategory($category, silentAlerts: true), report: false);
         }
 
         return back()->with('success', "Tracking \"{$validated['name']}\" — {$category->streams()->count()} streams found.");
     }
 
-    public function updateCategory(Request $request, Category $category): \Illuminate\Http\RedirectResponse
+    public function updateCategory(Request $request, Category $category): RedirectResponse
     {
         $validated = $request->validate([
             'is_active' => 'sometimes|boolean',
@@ -152,7 +144,7 @@ class TrackingController extends Controller
 
     // ── Tag Filters ──────────────────────────────────────────────────
 
-    public function storeTagFilter(Request $request): \Illuminate\Http\RedirectResponse
+    public function storeTagFilter(Request $request): RedirectResponse
     {
         $user = $request->user();
 
@@ -169,7 +161,7 @@ class TrackingController extends Controller
         return back()->with('success', "Tag filter \"{$validated['tag']}\" created.");
     }
 
-    public function updateTagFilter(Request $request, TagFilter $tagFilter): \Illuminate\Http\RedirectResponse
+    public function updateTagFilter(Request $request, TagFilter $tagFilter): RedirectResponse
     {
         $validated = $request->validate([
             'min_viewers' => 'nullable|integer|min:0',
@@ -183,7 +175,7 @@ class TrackingController extends Controller
         return back()->with('success', "Tag filter \"{$tagFilter->tag}\" updated.");
     }
 
-    public function destroyTagFilter(TagFilter $tagFilter): \Illuminate\Http\RedirectResponse
+    public function destroyTagFilter(TagFilter $tagFilter): RedirectResponse
     {
         $tag = $tagFilter->tag;
 
@@ -198,7 +190,7 @@ class TrackingController extends Controller
         return back()->with('success', "Tag filter \"{$tag}\" removed.");
     }
 
-    public function destroyCategory(Category $category): \Illuminate\Http\RedirectResponse
+    public function destroyCategory(Category $category): RedirectResponse
     {
         $name = $category->name;
         $category->streams()->delete();
@@ -207,10 +199,10 @@ class TrackingController extends Controller
         return back()->with('success', "Category \"{$name}\" removed.");
     }
 
-    public function syncCategory(Category $category, SyncService $sync, TwitchApiService $twitch): \Illuminate\Http\RedirectResponse
+    public function syncCategory(Category $category, SyncService $sync, TwitchApiService $twitch): RedirectResponse
     {
         if (! $twitch->isConfigured()) {
-            return back()->with('error', 'Twitch API not configured.');
+            return back()->with('error', TwitchApiService::NOT_CONFIGURED);
         }
 
         $result = $sync->syncCategory($category);
@@ -227,7 +219,7 @@ class TrackingController extends Controller
         return back()->with('success', "\"{$category->name}\" synced — {$result['new']} new, {$result['updated']} updated.");
     }
 
-    public function storeChannel(Request $request, TwitchApiService $twitch, SyncService $sync): \Illuminate\Http\RedirectResponse
+    public function storeChannel(Request $request, TwitchApiService $twitch, TwitchUserLookup $lookup, SyncService $sync): RedirectResponse
     {
         $request->validate(['user_login' => 'required|string|max:255']);
 
@@ -244,17 +236,17 @@ class TrackingController extends Controller
 
         if ($twitch->isConfigured()) {
             try {
-                $users = $twitch->getUsers([$login]);
-                if (! empty($users)) {
-                    $userId = $users[0]['id'];
-                    $userName = $users[0]['display_name'] ?? $login;
-                    $login = strtolower($users[0]['login']);
-                    $avatar = $users[0]['profile_image_url'] ?? null;
-                } else {
-                    return back()->with('error', "Channel \"{$login}\" not found on Twitch.");
-                }
-            } catch (\Exception $e) {
-                // Continue with what we have
+                $found = $lookup->find($login);
+            } catch (\Exception) {
+                $found = false; // Twitch did not answer: continue with what we have
+            }
+
+            if ($found === null) {
+                return back()->with('error', "Channel \"{$login}\" not found on Twitch.");
+            }
+
+            if ($found) {
+                ['id' => $userId, 'login' => $login, 'display_name' => $userName, 'profile_image_url' => $avatar] = $found;
             }
         }
 
@@ -270,49 +262,44 @@ class TrackingController extends Controller
             'profile_image_url' => $avatar,
         ]);
 
-        // Sync immediately
+        // Show its stream right away; the scheduled sync catches up if this fails.
         if ($twitch->isConfigured()) {
-            try {
-                $sync->syncTrackedChannels($user, silentAlerts: true);
-            } catch (\Exception $e) {
-                // Will catch up
-            }
+            rescue(fn () => $sync->syncTrackedChannels($user, silentAlerts: true), report: false);
         }
 
         return back()->with('success', "Tracking channel \"{$userName}\".");
     }
 
-    public function destroyChannel(TrackedChannel $channel): \Illuminate\Http\RedirectResponse
+    public function destroyChannel(TrackedChannel $channel): RedirectResponse
     {
-        $name = $channel->user_name;
-        $this->removeChannelStreams($channel);
-        $channel->delete();
-
-        return back()->with('success', "Channel \"{$name}\" removed.");
+        return back()->with('success', "Channel \"{$this->untrack($channel)}\" removed.");
     }
 
-    public function destroyChannelByLogin(Request $request, string $login): \Illuminate\Http\RedirectResponse
+    public function destroyChannelByLogin(Request $request, string $login): RedirectResponse
     {
         $channel = TrackedChannel::ownedBy($request->user())->where('user_login', strtolower($login))->first();
         if (! $channel) {
             return back()->with('error', 'Channel not found.');
         }
 
-        $name = $channel->user_name;
-        $this->removeChannelStreams($channel);
-        $channel->delete();
-
-        return back()->with('success', "Channel \"{$name}\" untracked.");
+        return back()->with('success', "Channel \"{$this->untrack($channel)}\" untracked.");
     }
 
-    private function removeChannelStreams(TrackedChannel $channel): void
+    /**
+     * Stop tracking a channel, with the owner's streams that only exist
+     * because of it (no active tracked category). Returns its name.
+     */
+    private function untrack(TrackedChannel $channel): string
     {
-        // Remove the owner's streams that only exist because of channel tracking (no tracked category)
         Stream::ownedBy((int) $channel->owner_id)->where('user_login', $channel->user_login)
             ->where(function ($q) {
                 $q->whereNull('category_id')
                     ->orWhereDoesntHave('category', fn ($c) => $c->where('is_active', true));
             })
             ->delete();
+
+        $channel->delete();
+
+        return (string) $channel->user_name;
     }
 }

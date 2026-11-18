@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Services\Auth\LoginRateLimiter;
 use App\Services\Auth\OidcService;
+use App\Services\Auth\SessionLogin;
 use App\Services\Auth\SetupTokenService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -88,11 +89,7 @@ class LoginController extends Controller
 
         $this->limiter->clear($email, $ip);
 
-        $request->session()->regenerate();
-        Auth::login($user, remember: false);
-        $request->session()->put('auth.provider', 'local');
-
-        $user->forceFill(['last_login_at' => now()])->save();
+        SessionLogin::start($request, $user, SessionLogin::PROVIDER_LOCAL);
 
         return redirect()->intended('/');
     }
@@ -113,7 +110,7 @@ class LoginController extends Controller
         $request->session()->invalidate();
         $request->session()->regenerateToken();
 
-        if ($provider === 'oidc') {
+        if ($provider === SessionLogin::PROVIDER_OIDC) {
             $endSession = $this->oidc->endSessionUrl(is_string($idToken) ? $idToken : null, route('login'));
             if ($endSession) {
                 return Inertia::location($endSession);

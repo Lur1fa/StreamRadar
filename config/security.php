@@ -58,7 +58,11 @@ return [
         'connect_timeout' => (int) env('WEBHOOK_CONNECT_TIMEOUT', 5),
         'timeout' => (int) env('WEBHOOK_TIMEOUT', 10),
         'max_response_bytes' => (int) env('WEBHOOK_MAX_RESPONSE_BYTES', 1048576),
-        'discord_hosts' => ['discord.com', 'discordapp.com', 'ptb.discord.com', 'canary.discord.com'],
+        // Where a Discord webhook URL may point, for validation and for sending.
+        'discord' => [
+            'hosts' => ['discord.com', 'discordapp.com', 'ptb.discord.com', 'canary.discord.com'],
+            'path_prefix' => '/api/webhooks/',
+        ],
     ],
 
     /*

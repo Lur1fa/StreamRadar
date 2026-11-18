@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -121,6 +122,18 @@ class User extends Authenticatable
     public function isAdmin(): bool
     {
         return $this->role === self::ROLE_ADMIN;
+    }
+
+    /** Whether no other active administrator would be left without this account. */
+    public function isLastActiveAdmin(): bool
+    {
+        return $this->isAdmin() && static::admins()->active()->whereKeyNot($this->getKey())->doesntExist();
+    }
+
+    /** Sign the account out on every device (database session driver). */
+    public function endAllSessions(): void
+    {
+        DB::table(config('session.table', 'sessions'))->where('user_id', $this->getKey())->delete();
     }
 
     public function isDisabled(): bool

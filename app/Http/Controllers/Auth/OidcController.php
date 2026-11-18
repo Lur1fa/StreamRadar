@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Auth;
 use App\Http\Controllers\Controller;
 use App\Services\Auth\OidcException;
 use App\Services\Auth\OidcService;
+use App\Services\Auth\SessionLogin;
 use App\Support\Redactor;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -54,9 +55,7 @@ class OidcController extends Controller
             return redirect()->route('login')->withErrors(['oidc' => 'Single sign-on is currently unavailable.']);
         }
 
-        $request->session()->regenerate();
-        Auth::login($user, remember: false);
-        $request->session()->put('auth.provider', 'oidc');
+        SessionLogin::start($request, $user, SessionLogin::PROVIDER_OIDC);
         if ($identity->idToken) {
             $request->session()->put('oidc.id_token', $identity->idToken);
         }

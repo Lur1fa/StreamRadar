@@ -101,7 +101,6 @@ Route::middleware('auth')->group(function () {
 */
 Route::middleware(['auth', 'can:admin'])->group(function () {
     // Installation settings and backup
-    Route::get('/settings/check-update', [SettingsController::class, 'checkUpdate'])->name('settings.check-update');
     Route::get('/settings/export', [SettingsController::class, 'export'])->name('settings.export');
     Route::post('/settings/import', [SettingsController::class, 'import'])->name('settings.import');
     Route::post('/settings/test-twitch', [SettingsController::class, 'testTwitch'])->middleware('throttle:settings-tests')->name('settings.test-twitch');

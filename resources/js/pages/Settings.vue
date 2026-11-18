@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { useForm, router, Link } from '@inertiajs/vue3';
-import { Key, RefreshCw, Filter, Mail, Palette, X, Plus, Bell, Lock, Download, Upload, ArrowUpCircle } from 'lucide-vue-next';
+import { Key, RefreshCw, Filter, Mail, Palette, X, Plus, Bell, Lock, Download, Upload } from 'lucide-vue-next';
 import AppLayout from '@/layouts/AppLayout.vue';
 import NotificationDestinations from '@/components/NotificationDestinations.vue';
 import FieldError from '@/components/FieldError.vue';
@@ -170,20 +170,6 @@ const estimatedRequests = computed(() => {
     return { perMin, perHour, perDay, pct };
 });
 
-// Version check
-const updateAvailable = ref(false);
-const localVersion = ref('');
-const remoteVersion = ref('');
-
-async function checkForUpdate() {
-    try {
-        const { data } = await window.axios.get('/settings/check-update');
-        updateAvailable.value = data.update_available;
-        localVersion.value = data.local_version || '';
-        remoteVersion.value = data.remote_version || '';
-    } catch {}
-}
-
 // Sidebar scroll spy
 const activeSection = ref(isAdmin.value ? 'twitch' : 'filters');
 const sections = [
@@ -203,7 +189,6 @@ function scrollTo(id: string) {
 }
 
 onMounted(() => {
-    if (isAdmin.value) checkForUpdate();
     const observer = new IntersectionObserver((entries) => {
         for (const entry of entries) {
             if (entry.isIntersecting) {
@@ -242,19 +227,6 @@ onMounted(() => {
 
             <!-- Content -->
             <div class="flex-1 min-w-0 max-w-3xl space-y-6">
-                <!-- Update banner -->
-                <div v-if="updateAvailable" class="flex items-start gap-3 p-4 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 rounded-xl">
-                    <ArrowUpCircle class="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                    <div>
-                        <p class="text-sm font-medium text-amber-800 dark:text-amber-300">A new version of StreamRadar is available!</p>
-                        <p class="text-xs text-amber-600 dark:text-amber-400 mt-1">
-                            Current: <code class="px-1 py-0.5 bg-amber-100 dark:bg-amber-500/20 rounded">{{ localVersion }}</code>
-                            → Latest: <code class="px-1 py-0.5 bg-amber-100 dark:bg-amber-500/20 rounded">{{ remoteVersion }}</code>
-                        </p>
-                        <p class="text-xs text-amber-700 dark:text-amber-400 mt-2">To update (Docker):</p>
-                        <code class="block text-xs text-amber-800 dark:text-amber-300 bg-amber-100 dark:bg-amber-500/20 rounded px-2 py-1 mt-1">git pull && docker compose up -d --build</code>
-                    </div>
-                </div>
                 <!-- Mobile section nav -->
                 <div class="lg:hidden sticky top-16 z-20 -mx-4 px-4 py-2 bg-gray-50/80 dark:bg-zinc-950/80 backdrop-blur-md">
                     <div class="flex gap-1.5 overflow-x-auto scrollbar-hide">

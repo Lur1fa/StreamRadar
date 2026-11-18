@@ -6,11 +6,16 @@ if [ ! -f /app/.env ]; then
     cp /app/.env.example /app/.env
 fi
 
-# Generate APP_KEY if not set
-if [ -z "$APP_KEY" ] || [ "$APP_KEY" = "" ]; then
-    if grep -q "^APP_KEY=$" /app/.env 2>/dev/null || ! grep -q "^APP_KEY=" /app/.env 2>/dev/null; then
-        php /app/artisan key:generate --force
-    fi
+# APP_KEY encrypts the stored secrets and must come from the .env next to
+# docker-compose.yml. It is never generated here: a key that only lives in the
+# container is lost on the next update, and every stored secret with it.
+if [ -z "$APP_KEY" ] && ! grep -q "^APP_KEY=." /app/.env 2>/dev/null; then
+    echo "" >&2
+    echo "  ERROR: APP_KEY is not set. Add it to the .env next to docker-compose.yml:" >&2
+    echo '    echo "APP_KEY=base64:$(openssl rand -base64 32)" >> .env' >&2
+    echo "  then run: docker compose up -d" >&2
+    echo "" >&2
+    exit 1
 fi
 
 # Refuse to start with debug output in production; the app also enforces this at runtime.

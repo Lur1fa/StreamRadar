@@ -144,7 +144,3 @@ test('POST /settings/test-twitch calls testConnection', function () {
 
     $this->postJson('/settings/test-twitch')->assertOk()->assertJson(['success' => true]);
 });
-
-test('GET /settings/check-update does not require a shell', function () {
-    $this->getJson('/settings/check-update')->assertOk()->assertJsonStructure(['update_available']);
-});

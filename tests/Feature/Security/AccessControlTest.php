@@ -33,7 +33,6 @@ dataset('admin only', [
     ['get', '/settings/export'],
     ['post', '/settings/import'],
     ['post', '/settings/test-twitch'],
-    ['get', '/settings/check-update'],
     ['get', '/users'],
     ['post', '/users'],
     ['put', '/users/sso'],

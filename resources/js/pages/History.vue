@@ -5,30 +5,29 @@ import { Search, Clock, Radio, WifiOff, Bell, RefreshCw, Trash2, Eye } from 'luc
 import AppLayout from '@/layouts/AppLayout.vue';
 import ConfirmModal from '@/components/ConfirmModal.vue';
 import { useNow } from '@/composables/useNow';
-import { twitchCategoryUrl } from '@/composables/useTwitch';
+import { useDebouncedFn } from '@/composables/useDebouncedFn';
+import { relativeTime, twitchCategoryUrl, twitchChannelUrl } from '@/utils';
 import type { HistoryEvent, PaginatedData } from '@/types';
 
 const props = defineProps<{ events: PaginatedData<HistoryEvent>; filters: { type: string | null; search: string | null } }>();
 const searchInput = ref(props.filters.search || '');
 
-let searchTimeout: ReturnType<typeof setTimeout>;
+/** Reload the list with these filters; empty ones are left out of the URL. */
+function go(type: string | null, search: string) {
+    const params: Record<string, string> = {};
+    if (type) params.type = type;
+    if (search) params.search = search;
+    router.get('/history', params, { preserveState: true, preserveScroll: true });
+}
+
+const search = useDebouncedFn((value: string) => go(props.filters.type, value), 300);
 function onSearch(e: Event) {
-    const value = (e.target as HTMLInputElement).value;
-    searchInput.value = value;
-    clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(() => {
-        const params: Record<string, any> = {};
-        if (value) params.search = value;
-        if (props.filters.type) params.type = props.filters.type;
-        router.get('/history', params, { preserveState: true, preserveScroll: true });
-    }, 300);
+    searchInput.value = (e.target as HTMLInputElement).value;
+    search(searchInput.value);
 }
 
 function filterByType(type: string | null) {
-    const params: Record<string, any> = {};
-    if (type) params.type = type;
-    if (searchInput.value) params.search = searchInput.value;
-    router.get('/history', params, { preserveState: true, preserveScroll: true });
+    go(type, searchInput.value);
 }
 
 const showClearConfirm = ref(false);
@@ -37,13 +36,7 @@ function clearHistory() { router.delete('/history', { preserveScroll: true, onSu
 const now = useNow();
 
 function formatTime(dateStr: string): string {
-    const d = new Date(dateStr);
-    const diffMin = Math.floor((now.value - d.getTime()) / 60000);
-    if (diffMin < 1) return 'Just now';
-    if (diffMin < 60) return `${diffMin}m ago`;
-    const diffH = Math.floor(diffMin / 60);
-    if (diffH < 24) return `${diffH}h ago`;
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return relativeTime(dateStr, now.value, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 function timeKey(dateStr: string): string {
@@ -119,7 +112,7 @@ const types = Object.keys(typeConfig);
                     </div>
                     <div class="flex-1 min-w-0">
                         <div class="flex items-center gap-2">
-                            <a v-if="event.streamer_login" :href="`https://www.twitch.tv/${event.streamer_login}`" target="_blank" class="text-sm font-medium text-gray-900 dark:text-white truncate hover:text-purple-600 dark:hover:text-purple-400 transition-colors">{{ event.streamer_name || event.streamer_login }}</a>
+                            <a v-if="event.streamer_login" :href="twitchChannelUrl(event.streamer_login)" target="_blank" class="text-sm font-medium text-gray-900 dark:text-white truncate hover:text-purple-600 dark:hover:text-purple-400 transition-colors">{{ event.streamer_name || event.streamer_login }}</a>
                             <span class="text-[10px] font-bold uppercase text-gray-400 dark:text-zinc-500">{{ typeConfig[event.type]?.label || event.type }}</span>
                         </div>
                         <p v-if="event.type === 'sync_completed' && event.metadata" class="text-xs text-gray-500 dark:text-zinc-500 mt-0.5">

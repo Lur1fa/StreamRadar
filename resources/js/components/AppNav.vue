@@ -1,29 +1,41 @@
 <script setup lang="ts">
 import { Link, usePage, router } from '@inertiajs/vue3';
 import { computed, ref, onMounted, nextTick } from 'vue';
-import { Radio, Bell, LayoutGrid, ShieldBan, Clock, Settings } from 'lucide-vue-next';
+import { Radio, Bell, LayoutGrid, ShieldBan, Clock, Settings, Users } from 'lucide-vue-next';
+import { useAuth } from '@/composables/useAuth';
 import type { Stats } from '@/types';
 
 const props = defineProps<{
     mobile?: boolean;
-    stats: Stats;
+    stats: Stats | null;
 }>();
 
 const page = usePage();
+const { isAdmin } = useAuth();
 const currentPath = computed(() => page.url.split('?')[0]);
 
 const tabs = computed(() => [
-    { name: 'Streams', href: '/', match: '/', icon: Radio, count: props.stats.streams_count },
-    { name: 'Tracking', href: '/tracking', match: '/tracking', icon: LayoutGrid, count: props.stats.categories_count },
-    { name: 'Alerts', href: '/alerts', match: '/alerts', icon: Bell, count: props.stats.alerts_count },
-    { name: 'Blacklist', href: '/blacklist', match: '/blacklist', icon: ShieldBan, count: props.stats.blacklist_count },
+    { name: 'Streams', href: '/', match: '/', icon: Radio, count: props.stats?.streams_count ?? null },
+    { name: 'Tracking', href: '/tracking', match: '/tracking', icon: LayoutGrid, count: props.stats?.categories_count ?? null },
+    { name: 'Alerts', href: '/alerts', match: '/alerts', icon: Bell, count: props.stats?.alerts_count ?? null },
+    { name: 'Blacklist', href: '/blacklist', match: '/blacklist', icon: ShieldBan, count: props.stats?.blacklist_count ?? null },
     { name: 'History', href: '/history', match: '/history', icon: Clock, count: null },
+    ...(isAdmin.value ? [
+        { name: 'Users', href: '/users', match: '/users', icon: Users, count: null },
+    ] : []),
     { name: 'Settings', href: '/settings', match: '/settings', icon: Settings, count: null },
 ]);
 
 function isActive(match: string): boolean {
     if (match === '/') return currentPath.value === '/';
     return currentPath.value.startsWith(match);
+}
+
+/** Colours of a tab's count badge, the same in both menus. */
+function badgeClass(match: string): string {
+    return isActive(match)
+        ? 'bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-300'
+        : 'bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400';
 }
 
 // Sliding underline
@@ -74,7 +86,7 @@ router.on('navigate', () => {
             :class="[
                 'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
                 isActive(tab.match)
-                    ? 'bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400'
+                    ? 'accent-soft'
                     : 'text-gray-600 hover:bg-gray-50 dark:text-zinc-400 dark:hover:bg-zinc-800'
             ]"
         >
@@ -82,12 +94,7 @@ router.on('navigate', () => {
             <span class="flex-1">{{ tab.name }}</span>
             <span
                 v-if="tab.count != null && tab.count > 0"
-                :class="[
-                    'px-2 py-0.5 text-[11px] font-semibold rounded-full',
-                    isActive(tab.match)
-                        ? 'bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-300'
-                        : 'bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400'
-                ]"
+                :class="['px-2 py-0.5 text-[11px] font-semibold rounded-full', badgeClass(tab.match)]"
             >
                 {{ tab.count }}
             </span>
@@ -121,12 +128,7 @@ router.on('navigate', () => {
                     {{ tab.name }}
                     <span
                         v-if="tab.count != null && tab.count > 0"
-                        :class="[
-                            'px-1.5 py-0.5 text-[10px] font-semibold rounded-full leading-none',
-                            isActive(tab.match)
-                                ? 'bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-300'
-                                : 'bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400'
-                        ]"
+                        :class="['px-1.5 py-0.5 text-[10px] font-semibold rounded-full leading-none', badgeClass(tab.match)]"
                     >
                         {{ tab.count }}
                     </span>

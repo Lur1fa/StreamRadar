@@ -5,15 +5,29 @@ namespace App\Services;
 use App\Mail\StreamAlertMail;
 use App\Models\AlertRule;
 use App\Models\HistoryEvent;
-use App\Models\Setting;
+use App\Models\NotificationDestination;
 use App\Models\Stream;
 use App\Models\StreamAlertTracking;
-use Illuminate\Support\Facades\Http;
+use App\Services\Http\SafeHttpClient;
+use App\Services\Mail\SmtpSettings;
+use App\Services\Notifications\AlertPresenter;
+use App\Services\Notifications\DeliveryFailed;
+use App\Services\Notifications\DestinationType;
+use App\Support\Brand;
+use App\Support\Redactor;
+use App\Support\Text;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Throwable;
 
 class AlertService
 {
+    public function __construct(
+        private AlertPresenter $presenter,
+        private SafeHttpClient $http,
+    ) {}
+
     /**
      * @param  bool  $silent  If true, records tracking but does not trigger notifications (used for initial sync)
      * @return array<array{rule: AlertRule, stream: Stream}>
@@ -21,7 +35,8 @@ class AlertService
     public function checkAlerts(Stream $stream, ?Stream $oldStream, bool $silent = false): array
     {
         $triggeredAlerts = [];
-        $rules = AlertRule::where('is_active', true)->get();
+        // Only the rules of the account this stream row belongs to.
+        $rules = AlertRule::ownedBy((int) $stream->owner_id)->where('is_active', true)->get();
 
         foreach ($rules as $rule) {
             if (! $rule->matchesStream($stream)) {
@@ -53,39 +68,21 @@ class AlertService
                 }
             }
 
-            if ($silent) {
-                StreamAlertTracking::updateOrCreate(
-                    ['alert_rule_id' => $rule->id, 'stream_twitch_id' => $stream->twitch_id],
-                    ['streamer_login' => $stream->user_login],
-                );
-                continue;
+            self::track($rule, $stream, triggered: ! $silent);
+
+            if (! $silent) {
+                $triggeredAlerts[] = ['rule' => $rule, 'stream' => $stream];
             }
-
-            StreamAlertTracking::updateOrCreate(
-                ['alert_rule_id' => $rule->id, 'stream_twitch_id' => $stream->twitch_id],
-                ['streamer_login' => $stream->user_login, 'triggered_at' => now()],
-            );
-
-            $triggeredAlerts[] = [
-                'rule' => $rule,
-                'stream' => $stream,
-            ];
         }
 
         if (! empty($triggeredAlerts)) {
-            $ruleNames = array_map(fn ($a) => $a['rule']->name, $triggeredAlerts);
-            $ruleIds = array_map(fn ($a) => $a['rule']->id, $triggeredAlerts);
-
-            HistoryEvent::create([
-                'type' => 'alert_triggered',
-                'stream_twitch_id' => $stream->twitch_id,
-                'streamer_login' => $stream->user_login,
-                'streamer_name' => $stream->user_name,
-                'category_name' => $stream->game_name ?? $stream->category?->name,
-                'title' => $stream->title,
-                'viewer_count' => $stream->viewer_count,
-                'profile_image_url' => $stream->profile_image_url,
-                'metadata' => ['rule_names' => $ruleNames, 'rule_ids' => $ruleIds],
+            HistoryEvent::createFor((int) $stream->owner_id, [
+                'type' => HistoryEvent::ALERT_TRIGGERED,
+                ...HistoryEvent::streamColumns($stream, $stream->game_name),
+                'metadata' => [
+                    'rule_names' => array_map(fn ($a) => $a['rule']->name, $triggeredAlerts),
+                    'rule_ids' => array_map(fn ($a) => $a['rule']->id, $triggeredAlerts),
+                ],
             ]);
         }
 
@@ -94,116 +91,138 @@ class AlertService
 
     public function seedTrackingForRule(AlertRule $rule): void
     {
-        $streams = Stream::all();
-
-        foreach ($streams as $stream) {
-            if (! $rule->matchesStream($stream)) {
-                continue;
+        foreach (Stream::ownedBy((int) $rule->owner_id)->get() as $stream) {
+            if ($rule->matchesStream($stream)) {
+                self::track($rule, $stream, triggered: false);
             }
-
-            StreamAlertTracking::updateOrCreate(
-                ['alert_rule_id' => $rule->id, 'stream_twitch_id' => $stream->twitch_id],
-                ['streamer_login' => $stream->user_login],
-            );
         }
     }
 
     /**
+     * Remember that a rule has seen a stream, so it does not alert for it
+     * again. $triggered also stamps the time an alert went out.
+     */
+    private static function track(AlertRule $rule, Stream $stream, bool $triggered): void
+    {
+        StreamAlertTracking::updateOrCreate(
+            ['alert_rule_id' => $rule->id, 'stream_twitch_id' => $stream->twitch_id],
+            ['streamer_login' => $stream->user_login, ...($triggered ? ['triggered_at' => now()] : [])],
+        );
+    }
+
+    /**
+     * Deliver triggered alerts to the destinations of the account each rule
+     * belongs to: every enabled destination whose type the rule has switched
+     * on. Each account and each destination is isolated: a failure (network
+     * error, bad template, misconfiguration) is logged and never propagates
+     * to the caller, so a scheduled sync always completes and one account
+     * cannot hold up another.
+     *
      * @param  array<array{rule: AlertRule, stream: Stream}>  $allTriggered
      */
     public function sendNotifications(array $allTriggered): void
     {
-        if (empty($allTriggered)) {
-            return;
-        }
-
-        if (Setting::get('notifications_email_enabled', '1') !== '0') {
-            $this->sendEmailAlerts($allTriggered);
-        }
-        if (Setting::get('notifications_discord_enabled', '1') !== '0') {
-            $this->sendDiscordAlerts($allTriggered);
-        }
-        if (Setting::get('notifications_telegram_enabled', '1') !== '0') {
-            $this->sendTelegramAlerts($allTriggered);
-        }
-        if (Setting::get('notifications_webhook_enabled', '1') !== '0') {
-            $this->sendWebhookAlerts($allTriggered);
-        }
-    }
-
-    /**
-     * @return array<array{stream: Stream, rules: string[]}>
-     */
-    private function groupByStream(array $alerts): array
-    {
-        $grouped = [];
-        foreach ($alerts as $alert) {
-            $key = $alert['stream']->twitch_id;
-            if (! isset($grouped[$key])) {
-                $grouped[$key] = ['stream' => $alert['stream'], 'rules' => []];
+        $byOwner = [];
+        foreach ($allTriggered as $alert) {
+            $ownerId = $alert['rule']->owner_id;
+            if ($ownerId !== null) {
+                $byOwner[(int) $ownerId][] = $alert;
             }
-            $grouped[$key]['rules'][] = $alert['rule']->name;
         }
 
-        return array_values($grouped);
+        foreach ($byOwner as $ownerId => $alerts) {
+            try {
+                $destinations = NotificationDestination::ownedBy($ownerId)->where('enabled', true)->orderBy('id')->get();
+            } catch (Throwable $e) {
+                $this->logFailure('Failed to load alert destinations', $e);
+
+                continue;
+            }
+
+            foreach ($destinations as $destination) {
+                $flag = $destination->type->ruleFlag();
+                $selected = array_values(array_filter($alerts, fn (array $a) => (bool) $a['rule']->getAttribute($flag)));
+
+                if ($selected === [] || ! $destination->isComplete()) {
+                    continue;
+                }
+
+                try {
+                    $this->deliver($destination, $selected);
+                } catch (Throwable $e) {
+                    $this->logFailure("Failed to send alerts to a {$destination->type->label()} destination", $e, $destination);
+                }
+            }
+        }
     }
 
     /**
-     * Build a presentation-ready data array for a grouped stream entry.
+     * Send alerts to one destination, whether or not it is enabled. Every
+     * message is attempted; the first failure is rethrown afterwards, so a
+     * test from the Settings page can report it.
+     *
+     * @param  array<array{rule: AlertRule, stream: Stream}>  $alerts
+     *
+     * @throws Throwable
      */
-    private function presentStream(array $entry): array
+    public function deliver(NotificationDestination $destination, array $alerts): void
     {
-        $stream = $entry['stream'];
-        $categoryBoxArt = $stream->game_box_art_url
-            ? str_replace(['{width}', '{height}'], ['188', '250'], $stream->game_box_art_url)
-            : $stream->category?->getBoxArtUrlSized(188, 250);
+        match ($destination->type) {
+            DestinationType::Ntfy => $this->sendNtfy($destination, $alerts),
+            DestinationType::Webhook => $this->sendWebhook($destination, $alerts),
+            DestinationType::Email => $this->sendEmail($destination, $alerts),
+            DestinationType::Telegram => $this->sendTelegram($destination, $alerts),
+            DestinationType::Discord => $this->sendDiscord($destination, $alerts),
+        };
+    }
 
-        return [
-            'stream' => $stream,
-            'rules' => implode(', ', $entry['rules']),
-            'url' => $stream->getTwitchUrl(),
-            'viewers' => number_format($stream->viewer_count),
-            'category' => $stream->game_name ?? $stream->category?->name ?? 'Unknown',
-            'language' => strtoupper($stream->language ?? '?'),
-            'avatar' => $stream->profile_image_url,
-            'thumbnail' => $stream->getThumbnailUrlSized(440, 248),
-            'category_box_art' => $categoryBoxArt,
-        ];
+    /**
+     * Run $send for every item; rethrow the first failure once all were tried.
+     *
+     * @param  array<mixed>  $items
+     */
+    private function eachMessage(array $items, callable $send): void
+    {
+        $failure = null;
+
+        foreach ($items as $item) {
+            try {
+                $send($item);
+            } catch (Throwable $e) {
+                $failure ??= $e;
+            }
+        }
+
+        if ($failure !== null) {
+            throw $failure;
+        }
+    }
+
+    private static function ensureSuccessful(Response $response, string $service): void
+    {
+        if (! $response->successful()) {
+            throw DeliveryFailed::fromResponse($service, $response);
+        }
     }
 
     // ── Discord ──────────────────────────────────────────────────────────
 
-    private function sendDiscordAlerts(array $alerts): void
+    private function sendDiscord(NotificationDestination $destination, array $alerts): void
     {
-        $webhookUrl = Setting::get('discord_webhook_url');
-        if (! $webhookUrl) {
-            return;
-        }
-
-        $discordAlerts = array_filter($alerts, fn ($a) => $a['rule']->notify_discord);
-        if (empty($discordAlerts)) {
-            return;
-        }
+        $webhookUrl = (string) $destination->secret('webhook_url');
 
         $embeds = [];
-        foreach ($this->groupByStream($discordAlerts) as $entry) {
-            $p = $this->presentStream($entry);
+        foreach (AlertPresenter::group($alerts) as $entry) {
+            $p = AlertPresenter::details($entry['stream'], 188, 250);
+            $headline = AlertPresenter::headline($entry['stream']);
 
             $embed = [
-                'title' => $p['stream']->title,
+                'title' => $headline,
                 'url' => $p['url'],
-                'color' => 0x9147ff,
-                'author' => [
-                    'name' => "{$p['stream']->user_name} is live!",
-                    'url' => $p['url'],
-                ],
-                'fields' => [
-                    ['name' => 'Category', 'value' => $p['category'], 'inline' => true],
-                    ['name' => 'Viewers', 'value' => $p['viewers'], 'inline' => true],
-                    ['name' => 'Language', 'value' => $p['language'], 'inline' => true],
-                ],
-                'footer' => ['text' => "Alert: {$p['rules']}"],
+                'color' => Brand::colorInt(),
+                'author' => ['name' => $headline, 'url' => $p['url']],
                 'timestamp' => now()->toIso8601String(),
+                'description' => $this->presenter->message($entry, 'discord'),
             ];
 
             if ($p['avatar']) {
@@ -219,151 +238,189 @@ class AlertService
             $embeds[] = $embed;
         }
 
-        foreach (array_chunk($embeds, 10) as $chunk) {
-            try {
-                Http::post($webhookUrl, ['embeds' => $chunk]);
-            } catch (\Exception $e) {
-                Log::warning("Failed to send Discord alert: {$e->getMessage()}");
-            }
-        }
+        $this->eachMessage(array_chunk($embeds, 10), function (array $chunk) use ($webhookUrl) {
+            self::ensureSuccessful($this->http->post($webhookUrl, [
+                'embeds' => $chunk,
+                // Stream titles are attacker-controlled; never let them ping anyone.
+                'allowed_mentions' => ['parse' => []],
+            ], [], self::discordPolicy()), 'Discord');
+        });
+    }
+
+    /**
+     * Where a Discord webhook may point. Validation of a saved URL uses the
+     * same policy (SafeWebhookUrl::discord()).
+     *
+     * @return array{allowed_hosts: string[], require_https: bool, path_prefix: string}
+     */
+    public static function discordPolicy(): array
+    {
+        return [
+            'allowed_hosts' => (array) config('security.webhook.discord.hosts'),
+            'require_https' => true,
+            'path_prefix' => (string) config('security.webhook.discord.path_prefix'),
+        ];
     }
 
     // ── Telegram ─────────────────────────────────────────────────────────
 
-    private function sendTelegramAlerts(array $alerts): void
+    private function sendTelegram(NotificationDestination $destination, array $alerts): void
     {
-        $token = Setting::get('telegram_bot_token');
-        $chatId = Setting::get('telegram_chat_id');
-        if (! $token || ! $chatId) {
-            return;
-        }
+        $token = (string) $destination->secret('bot_token');
+        $chatId = (string) ($destination->config['chat_id'] ?? '');
 
-        $telegramAlerts = array_filter($alerts, fn ($a) => $a['rule']->notify_telegram ?? false);
-        if (empty($telegramAlerts)) {
-            return;
-        }
-
-        $grouped = $this->groupByStream($telegramAlerts);
         $apiBase = "https://api.telegram.org/bot{$token}";
+        $policy = ['allowed_hosts' => ['api.telegram.org'], 'require_https' => true];
 
-        foreach ($grouped as $entry) {
-            $p = $this->presentStream($entry);
-            $s = $p['stream'];
+        $this->eachMessage(AlertPresenter::group($alerts), function (array $entry) use ($apiBase, $chatId, $policy) {
+            $thumbnail = AlertPresenter::details($entry['stream'], 188, 250)['thumbnail'];
 
-            $caption = "<b>{$s->user_name}</b> is live!\n"
-                ."<a href=\"{$p['url']}\">{$s->title}</a>\n\n"
-                ."🎮 {$p['category']}  ·  👁 {$p['viewers']}  ·  🌐 {$p['language']}\n"
-                ."📋 Alert: {$p['rules']}";
+            $caption = '<b>'.htmlspecialchars(AlertPresenter::headline($entry['stream']), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')."</b>\n"
+                .$this->presenter->message($entry, 'telegram');
 
-            try {
-                if ($p['thumbnail']) {
-                    Http::post("{$apiBase}/sendPhoto", [
-                        'chat_id' => $chatId,
-                        'photo' => $p['thumbnail'],
-                        'caption' => $caption,
-                        'parse_mode' => 'HTML',
-                    ]);
-                } else {
-                    Http::post("{$apiBase}/sendMessage", [
-                        'chat_id' => $chatId,
-                        'text' => $caption,
-                        'parse_mode' => 'HTML',
-                        'disable_web_page_preview' => true,
-                    ]);
-                }
-            } catch (\Exception $e) {
-                Log::warning("Failed to send Telegram alert: {$e->getMessage()}");
-            }
-        }
+            $response = $thumbnail
+                ? $this->http->post("{$apiBase}/sendPhoto", [
+                    'chat_id' => $chatId,
+                    'photo' => $thumbnail,
+                    'caption' => $caption,
+                    'parse_mode' => 'HTML',
+                ], [], $policy)
+                : $this->http->post("{$apiBase}/sendMessage", [
+                    'chat_id' => $chatId,
+                    'text' => $caption,
+                    'parse_mode' => 'HTML',
+                    'disable_web_page_preview' => true,
+                ], [], $policy);
+
+            self::ensureSuccessful($response, 'Telegram');
+        });
     }
 
     // ── Webhook ──────────────────────────────────────────────────────────
 
-    private function sendWebhookAlerts(array $alerts): void
+    /**
+     * One request per batch with a fixed JSON payload (event
+     * `stream.alerts.batch`), using the destination's method, headers,
+     * query parameters and authentication.
+     */
+    private function sendWebhook(NotificationDestination $destination, array $alerts): void
     {
-        $webhookUrl = Setting::get('webhook_url');
-        if (! $webhookUrl) {
-            return;
+        $config = $destination->config ?? [];
+
+        $payload = [];
+        foreach (AlertPresenter::group($alerts) as $entry) {
+            $s = $entry['stream'];
+            $p = AlertPresenter::details($s, 188, 250);
+
+            $payload[] = [
+                'event' => 'stream.alert',
+                'rules' => $entry['rules'],
+                'channel' => $s->user_name,
+                'channel_login' => $s->user_login,
+                'title' => $s->title,
+                'game' => $p['category'],
+                'viewers' => $s->viewer_count,
+                'language' => $s->language,
+                'url' => $p['url'],
+                'thumbnail' => $p['thumbnail'],
+                'avatar' => $p['avatar'],
+                'category_box_art' => $p['category_box_art'],
+                'started_at' => $s->started_at?->toIso8601String(),
+                'is_mature' => $s->is_mature,
+                'tags' => $s->tags,
+            ];
         }
 
-        $webhookAlerts = array_filter($alerts, fn ($a) => $a['rule']->notify_webhook);
-        if (empty($webhookAlerts)) {
-            return;
+        $options = ['query' => $destination->queryParameters()];
+        $auth = $config['auth'] ?? 'none';
+        if ($auth === 'basic') {
+            $options['basic_auth'] = [(string) ($config['auth_username'] ?? ''), (string) $destination->secret('auth_password')];
+        } elseif ($auth === 'bearer') {
+            $options['bearer_token'] = (string) $destination->secret('auth_token');
         }
 
-        foreach ($this->groupByStream($webhookAlerts) as $entry) {
-            $p = $this->presentStream($entry);
-            $s = $p['stream'];
+        $headers = [];
+        foreach ($destination->headers() as $name => $value) {
+            $replacesAuth = $auth !== 'none' && strcasecmp($name, 'Authorization') === 0;
+            if (! $replacesAuth && ! NotificationDestination::isReservedHeader($name) && ! Text::hasControlChars($name.$value)) {
+                $headers[$name] = $value;
+            }
+        }
 
-            $tags = $s->tags ? implode(', ', $s->tags) : null;
+        $response = $this->http->send((string) ($config['method'] ?? 'POST'), (string) $destination->secret('url'), [
+            'event' => 'stream.alerts.batch',
+            'count' => count($payload),
+            'alerts' => $payload,
+        ], $headers, $options);
 
-            $body = "{$s->title}\n"
-                . "{$p['category']} · {$p['viewers']} viewers\n"
-                . ($tags ? "Tags: {$tags}\n" : '')
-                . "Alert: {$p['rules']}";
+        self::ensureSuccessful($response, 'The webhook endpoint');
+    }
+
+    // ── ntfy ─────────────────────────────────────────────────────────────
+
+    /**
+     * One plain-text message per stream, with title, click action, preview
+     * image and avatar. An access token is sent as a Bearer header, a user
+     * name and password as Basic authentication.
+     */
+    private function sendNtfy(NotificationDestination $destination, array $alerts): void
+    {
+        $config = $destination->config ?? [];
+        $url = rtrim((string) ($config['server_url'] ?? ''), '/').'/'.rawurlencode((string) ($config['topic'] ?? ''));
+        $prefix = trim((string) ($config['title_prefix'] ?? ''));
+
+        $options = ['content_type' => 'text/plain'];
+        if ($token = $destination->secret('access_token')) {
+            $options['bearer_token'] = $token;
+        } elseif (trim((string) ($config['username'] ?? '')) !== '') {
+            $options['basic_auth'] = [(string) $config['username'], (string) $destination->secret('password')];
+        }
+
+        $this->eachMessage(AlertPresenter::group($alerts), function (array $entry) use ($url, $prefix, $options) {
+            $p = AlertPresenter::details($entry['stream'], 188, 250);
+            $title = trim($prefix.' '.AlertPresenter::headline($entry['stream']));
 
             $headers = [
-                'Title' => '=?UTF-8?B?'.base64_encode("{$s->user_name} is live").'?=',
-                'Click' => $p['url']
+                'Title' => '=?UTF-8?B?'.base64_encode($title).'?=',
             ];
 
+            // Never put a value with whitespace or control characters into a header.
+            if ($p['url'] !== '' && ! preg_match('/\s/', $p['url']) && ! Text::hasControlChars($p['url'])) {
+                $headers['Click'] = $p['url'];
+            }
             if ($p['thumbnail']) {
-                $headers['Attach'] = $p['thumbnail'] . '?t=' . time();
+                $headers['Attach'] = $p['thumbnail'].'?t='.time();
                 $headers['Filename'] = 'preview.jpg';
             }
             if ($p['avatar']) {
                 $headers['Icon'] = $p['avatar'];
             }
 
-            try {
-                Http::withHeaders($headers)
-                    ->withBody($body, 'text/plain')
-                    ->post($webhookUrl);
-            } catch (\Exception $e) {
-                Log::warning("Failed to send webhook alert: {$e->getMessage()}");
-            }
-        }
+            self::ensureSuccessful($this->http->send('POST', $url, $this->presenter->message($entry, 'plain'), $headers, $options), 'ntfy');
+        });
     }
 
     // ── Email ────────────────────────────────────────────────────────────
 
-    private function sendEmailAlerts(array $alerts): void
+    /**
+     * The recipients are the account's own; the SMTP server is the
+     * installation's, set by an administrator.
+     */
+    private function sendEmail(NotificationDestination $destination, array $alerts): void
     {
-        $recipient = Setting::get('mail_to');
-        if (! $recipient) {
-            return;
-        }
+        SmtpSettings::apply();
 
-        $emailAlerts = array_values(array_filter($alerts, fn ($a) => $a['rule']->notify_email));
-        if (empty($emailAlerts)) {
-            return;
-        }
+        $prefix = trim((string) ($destination->config['subject_prefix'] ?? ''));
 
-        $this->configureSmtp();
-
-        try {
-            Mail::to($recipient)->send(new StreamAlertMail($emailAlerts));
-        } catch (\Exception $e) {
-            Log::warning("Failed to send alert email: {$e->getMessage()}");
-        }
+        Mail::to($destination->recipients())->send(new StreamAlertMail($alerts, $prefix !== '' ? $prefix : null));
     }
 
-    private function configureSmtp(): void
+    private function logFailure(string $message, Throwable $e, ?NotificationDestination $destination = null): void
     {
-        $host = Setting::get('smtp_host');
-        if (! $host) {
-            return;
-        }
-
-        config([
-            'mail.default' => 'smtp',
-            'mail.mailers.smtp.host' => $host,
-            'mail.mailers.smtp.port' => Setting::get('smtp_port', 587),
-            'mail.mailers.smtp.username' => Setting::get('smtp_username') ?: null,
-            'mail.mailers.smtp.password' => Setting::get('smtp_password') ?: null,
-            'mail.mailers.smtp.encryption' => Setting::get('smtp_encryption') ?: null,
-            'mail.from.address' => Setting::get('mail_from_address'),
-            'mail.from.name' => Setting::get('mail_from_name', 'StreamRadar'),
-        ]);
+        Log::warning($message, array_filter([
+            'destination' => $destination?->id,
+            'exception' => $e::class,
+            'error' => Redactor::message($e->getMessage()),
+        ], fn ($value) => $value !== null));
     }
 }

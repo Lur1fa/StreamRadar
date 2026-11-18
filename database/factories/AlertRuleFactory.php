@@ -3,15 +3,20 @@
 namespace Database\Factories;
 
 use App\Models\AlertRule;
+use App\Services\Notifications\DestinationType;
+use Database\Factories\Concerns\HasOwner;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 class AlertRuleFactory extends Factory
 {
+    use HasOwner;
+
     protected $model = AlertRule::class;
 
     public function definition(): array
     {
         return [
+            'owner_id' => $this->defaultOwner(),
             'name' => fake()->words(3, true),
             'streamer_login' => null,
             'category_id' => null,
@@ -21,10 +26,7 @@ class AlertRuleFactory extends Factory
             'min_viewers' => null,
             'language' => null,
             'keywords' => null,
-            'notify_email' => false,
-            'notify_discord' => false,
-            'notify_telegram' => false,
-            'notify_webhook' => false,
+            ...array_fill_keys(DestinationType::ruleFlags(), false),
             'notify_on_category_change' => false,
             'notify_on_stream_start' => true,
             'is_active' => true,
@@ -64,6 +66,11 @@ class AlertRuleFactory extends Factory
     public function withWebhook(): static
     {
         return $this->state(['notify_webhook' => true]);
+    }
+
+    public function withNtfy(): static
+    {
+        return $this->state(['notify_ntfy' => true]);
     }
 
     public function withCategoryChange(): static

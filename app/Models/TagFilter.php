@@ -2,12 +2,16 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToOwner;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 class TagFilter extends Model
 {
-    use HasFactory;
+    use BelongsToOwner, HasFactory;
+
+    /** Columns in a configuration backup. */
+    public const EXPORT_COLUMNS = ['tag', 'min_viewers', 'min_avg_viewers', 'languages', 'keywords'];
 
     protected $fillable = [
         'tag',

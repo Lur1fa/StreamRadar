@@ -2,7 +2,7 @@
   <img src="public/images/logo.png" alt="StreamRadar" width="500">
 </p>
 
-<p align="center">A self-hosted dashboard for monitoring Twitch streams. Track categories and channels, filter by language and viewers, get alerts via email, Discord or webhooks.</p>
+<p align="center">A self-hosted dashboard for monitoring Twitch streams. Track categories and channels, filter by language and viewers, get alerts via ntfy, email, Discord, Telegram or webhooks.</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
@@ -12,14 +12,14 @@
 
 Twitch lets you follow categories, but it won't notify you when a new stream goes live in one. **There's no way to say "tell me when someone starts streaming this game in English with more than 50 viewers."** You're left refreshing the category page manually and scrolling through hundreds of streams.
 
-StreamRadar watches the categories and channels you pick, checks for new streams automatically, and alerts you via email, Discord, or any webhook when something matches your conditions — language, viewer count, keywords, you name it. Self-hosted, private, no account needed.
+StreamRadar watches the categories and channels you pick, checks for new streams automatically, and alerts you via ntfy, email, Discord, Telegram or any webhook when something matches your conditions — language, viewer count, keywords, you name it. Self-hosted, private, no account needed.
 
 ## What it does
 
 - **Track categories** — follow Twitch game categories (e.g. "Just Chatting", "Fortnite")
 - **Track channels** — follow specific Twitch channels regardless of what they stream
 - **Live dashboard** — see all live streams in one place with sorting, grouping, and filtering
-- **Alerts** — get notified when streams go live via email, Discord, Telegram, or generic webhook
+- **Alerts** — get notified when streams go live via ntfy, email, Discord, Telegram, or generic webhook
 - **Blacklist** — block channels, keywords, or tags from appearing in results
 - **Dark / Light mode** — system-aware theme with manual toggle
 - **Pin streams** — pin your favorites to the top
@@ -64,6 +64,27 @@ docker compose up -d
 
 Everything is automatic — database, encryption keys, and migrations are set up on first launch.
 
+**Create the first administrator.** StreamRadar requires a login and ships with no default account. On first start it prints a one-time setup token to the container log:
+
+```bash
+docker compose logs streamradar        # look for "Setup token:"
+# or generate a fresh one at any time:
+docker compose exec streamradar php artisan auth:setup-token
+```
+
+Open the app, go to the setup page, and paste the token to create your admin account. Prefer the command line? Run `docker compose exec streamradar php artisan user:create --admin`.
+
+**Access from other devices.** By default the container is published on `127.0.0.1` only. To expose it on your LAN set `APP_BIND=0.0.0.0` in `.env` (ideally behind a TLS reverse proxy).
+
+**Behind a TLS reverse proxy** set both of these in `.env`, then run `docker compose up -d`:
+
+```
+APP_URL=https://streamradar.example.com
+TRUSTED_PROXIES=172.16.0.0/12
+```
+
+With an `https://` `APP_URL`, every link and redirect (including the SSO callback address) is built from that URL and the session cookie is marked `Secure`, so the app is only usable through that address, not by IP over plain HTTP. `TRUSTED_PROXIES` (IPs or CIDR ranges of your proxy) lets the app see the real client IP for login throttling and logs.
+
 **Change the port** (e.g. to 3000): add `APP_PORT=3000` to `.env` file, then run `docker compose up -d`
 
 **Stop:** `docker compose stop`
@@ -90,13 +111,17 @@ npm run build
 # Set up the app
 cp .env.example .env
 php artisan key:generate
-php artisan app:setup
+php artisan app:setup          # migrations, defaults, and prints a setup token
+
+# Create the first administrator (either option works)
+php artisan user:create --admin
+#   …or use the setup token printed by app:setup on the /setup page
 
 # Start the server
 php artisan serve
 ```
 
-Open **http://localhost:8000** in your browser.
+Open **http://localhost:8000** in your browser and sign in.
 
 For automatic syncing, run this in a separate terminal:
 ```bash
@@ -143,22 +168,25 @@ StreamRadar needs a Twitch API key to fetch stream data. Don't worry — it only
 1. Go to the **Alerts** tab
 2. Click **New Alert**
 3. Configure what you want to be notified about
-4. Choose notification channels: Email, Discord, Telegram, and/or Webhook
+4. Choose where it goes: Discord, Email, Telegram, ntfy and/or Webhook
 
-Configure each channel in **Settings** first (SMTP for Email, webhook URL for Discord, bot token for Telegram, endpoint URL for Webhook).
+Add the destinations under **Settings → Notifications** first. A rule sends to every enabled destination of each type it has switched on.
 
 ---
 
 ## Notifications
 
-StreamRadar can send alerts through multiple channels:
+Each account keeps a list of destinations under **Settings → Notifications**: click **Add Destination**, pick the type, and fill in its fields. You can have several of the same type (two ntfy topics, say), switch each on or off, and send a test alert from the list.
 
-| Method | Setup |
-|--------|-------|
-| **Email** | Settings → Email/SMTP. Works with any SMTP server, Gmail, Mailgun, etc. |
-| **Discord** | Settings → Discord. Paste a [webhook URL](https://support.discord.com/hc/en-us/articles/228383668) from your server. |
-| **Telegram** | Settings → Telegram. Create a bot via [@BotFather](https://t.me/BotFather), copy the bot token, send `/start` to the bot, then enter the bot token and your chat ID. To find your chat ID, message [@userinfobot](https://t.me/userinfobot). |
-| **Webhook** | Settings → Webhook. POST JSON to any URL — works with [ntfy.sh](https://ntfy.sh), Zapier, Make, or your own endpoint. |
+| Type | Fields |
+|------|--------|
+| **ntfy** | Server URL and topic. For a protected topic, an access token (sent as `Authorization: Bearer`) or a username and password (Basic). Optional title prefix. |
+| **Webhook** | Method (POST, PUT, PATCH), URL, query parameters, headers, and authentication (none, Basic or Bearer token). Each batch of alerts is sent as JSON (`{"event": "stream.alerts.batch", "count": …, "alerts": […]}`). Works with Zapier, Make or your own endpoint. |
+| **Email** | One or more recipient addresses and an optional subject prefix. Sent through the mail server an admin sets up under **Settings → Mail Server**. |
+| **Telegram** | Bot token from [@BotFather](https://t.me/BotFather) and your chat ID (send `/start` to the bot; [@userinfobot](https://t.me/userinfobot) tells you the ID). |
+| **Discord** | A [webhook URL](https://support.discord.com/hc/en-us/articles/228383668) from your server. |
+
+Credentials never go in a URL: use the access token or username/password fields (ntfy) or **Authentication** (webhook). Upgrading turns the old Email, Discord, Telegram and Webhook settings into destinations; a webhook that used the ntfy format becomes an ntfy destination, and the alert rules that sent to it send to ntfy.
 
 ---
 
@@ -179,17 +207,54 @@ You can also manually sync anytime by clicking the **Sync** button in the top ba
 
 ## Security
 
-By default, StreamRadar has no login — it's designed for personal use on your local network.
+Authentication is always required — there is no open mode and no default password.
 
-To add password protection:
-1. Go to **Settings** → **Access Control**
-2. Set a username and password
-3. Click **Save**
+**Accounts and roles.** Each person has their own account with one of two roles:
 
-Login will be required in all new browser sessions. To disable it, click **Disable Access Control** or run:
+- **user** — their own streams, tracking, alerts, blacklist and history, their own default filters, and their own alert destinations (ntfy, webhook, e-mail, Telegram, Discord).
+- **admin** — the same for their own account, plus the installation: Twitch API keys, scanning, SMTP server, backup, and user management.
+
+**Each account has its own data.** Tracked categories and channels, alerts, blacklist, history and the stream list belong to the account that created them; no account sees or changes another account's. Alerts are delivered to the destinations of the account that owns the alert. Twitch is still asked only once per category on each scan, however many accounts track it. Deleting an account deletes its data.
+
+Because every account can add tracked categories and outbound alert destinations, only give accounts to people you trust with that: each tracked category costs Twitch API requests, e-mails go out through your SMTP server, and webhooks can reach the hosts listed in `WEBHOOK_ALLOWED_HOSTS`.
+
+**Upgrading from a version with shared data.** Everything that existed goes to the oldest administrator account; other accounts start empty. If you use a different account day to day (for example one created by single sign-on), move the data to it:
+
 ```bash
-php artisan auth:reset
+php artisan user:move-data old-admin@example.com you@example.com
 ```
+
+The command lists what it will move and asks before doing it. It refuses if the target account already has tracking data of its own, unless you add `--replace`, which deletes that data first.
+
+Admins manage accounts under **Users**, or from the command line (`user:create`, `user:password`, `user:role`, `user:list`, `user:delete`). The last administrator can never be demoted, disabled or deleted, so you cannot lock yourself out.
+
+**First administrator.** Created with the one-time token from `php artisan auth:setup-token` (printed automatically on first Docker start) on the `/setup` page, or directly with `php artisan user:create --admin`. No credentials are ever shipped or defaulted.
+
+**Single sign-on (optional).** StreamRadar speaks OpenID Connect (authorization-code flow with PKCE). Point it at Authentik, Keycloak, Entra ID, Google, etc. with a few environment variables:
+
+```dotenv
+OIDC_ENABLED=true
+OIDC_ISSUER=https://auth.example.com/application/o/streamradar/
+OIDC_CLIENT_ID=...
+OIDC_CLIENT_SECRET=...
+# optional: map an IdP group to the admin role
+OIDC_ADMIN_CLAIM=groups
+OIDC_ADMIN_VALUES=streamradar-admins
+```
+
+Group mapping only works if the provider sends the claim. If it needs its own scope (Authelia: `groups`), request it with `OIDC_SCOPES="openid profile email groups"` and allow that scope on the client. The role is re-evaluated on every sign-in.
+
+By default, anyone who signs in through the provider gets a regular account on first sign-in. Admins can turn that off on the **Users** page (or set `OIDC_AUTO_PROVISION=false` as the starting value); after that only people who already have an account can use SSO. To add someone, create the account on the Users page with the e-mail address they have at the provider; the password can be left empty for an account that signs in with SSO only.
+
+The redirect URI is `https://your-host/auth/oidc/callback`. SSO is additive: local password login stays available (set `AUTH_LOCAL_LOGIN=false` to require SSO), and the `user:*` commands always work, so an unreachable identity provider never locks admins out.
+
+**Lockout protection.** Failed logins are rate-limited per account (progressive lockout) and per IP. Passwords are bcrypt-hashed with a configurable minimum length (`AUTH_PASSWORD_MIN_LENGTH`, default 12).
+
+**Secrets.** API secrets, SMTP passwords and every destination's credentials (tokens, passwords, webhook URLs, header and query values) are encrypted at rest, never sent to the browser (only a mask is shown), and never included in exports.
+
+**Outbound webhooks.** ntfy, webhook and Discord URLs are validated against SSRF: they must resolve to public addresses, with no redirects and a response-size cap. To target a self-hosted endpoint on your LAN (e.g. ntfy), allow its exact hostname via `WEBHOOK_ALLOWED_HOSTS=ntfy.home.lan`.
+
+**Production hardening.** Keep `APP_ENV=production` and `APP_DEBUG=false` (the app forces both off if misconfigured). Developer tooling (Inertia DevTools) is disabled unless explicitly enabled and is never active in production; its endpoints additionally require an admin session.
 
 ---
 
@@ -250,7 +315,13 @@ To keep StreamRadar running continuously (including after system restarts):
 |---------|-------------|
 | `php artisan streams:sync` | Manually sync all streams |
 | `php artisan app:setup` | Initial setup (migrations + defaults) |
-| `php artisan auth:reset` | Remove password protection |
+| `php artisan auth:setup-token` | Print a one-time token to create the first admin on `/setup` |
+| `php artisan user:create --admin` | Create a user account (admin or user) |
+| `php artisan user:password <email>` | Reset an account's password (recovery) |
+| `php artisan user:role <email> <role>` | Change an account's role |
+| `php artisan user:list` | List accounts |
+| `php artisan user:move-data <from> <to>` | Move one account's tracking, alerts, blacklist, history and alert destinations to another account |
+| `php artisan user:delete <email>` | Delete an account |
 | `php artisan schedule:work` | Start the scheduler (auto-sync) |
 
 ## License

@@ -3,6 +3,7 @@ import { ref, watch, onMounted } from 'vue';
 import { router } from '@inertiajs/vue3';
 import { ShieldBan, User, Type, Tag, Trash2, Plus } from 'lucide-vue-next';
 import AppLayout from '@/layouts/AppLayout.vue';
+import { formatDate, twitchChannelUrl } from '@/utils';
 import type { BlacklistRule } from '@/types';
 
 const props = defineProps<{
@@ -56,10 +57,6 @@ function addRule() {
 function removeRule(rule: BlacklistRule) {
     router.delete(`/blacklist/${rule.id}`, { preserveScroll: true });
 }
-
-function formatDate(dateStr: string): string {
-    return new Date(dateStr).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-}
 </script>
 
 <template>
@@ -73,7 +70,7 @@ function formatDate(dateStr: string): string {
                 @click="activeTab = t.key"
                 :class="['flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-colors',
                     activeTab === t.key
-                        ? 'bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400'
+                        ? 'accent-soft'
                         : 'text-gray-500 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800']"
             >
                 <component :is="t.icon" class="w-4 h-4" />
@@ -123,10 +120,10 @@ function formatDate(dateStr: string): string {
                 </div>
 
                 <div class="flex-1 min-w-0">
-                    <a v-if="item.type === 'channel'" :href="`https://www.twitch.tv/${item.value}`" target="_blank" class="text-sm font-medium text-gray-900 dark:text-white hover:text-purple-600 dark:hover:text-purple-400 transition-colors">{{ item.value }}</a>
+                    <a v-if="item.type === 'channel'" :href="twitchChannelUrl(item.value)" target="_blank" class="text-sm font-medium text-gray-900 dark:text-white hover:text-purple-600 dark:hover:text-purple-400 transition-colors">{{ item.value }}</a>
                     <p v-else class="text-sm font-medium text-gray-900 dark:text-white">{{ item.value }}</p>
                 </div>
-                <span class="text-xs text-gray-400 dark:text-zinc-600 shrink-0 hidden sm:block">{{ formatDate(item.created_at) }}</span>
+                <span class="text-xs text-gray-400 dark:text-zinc-600 shrink-0 hidden sm:block">{{ formatDate(item.created_at, { year: 'numeric', month: 'short', day: 'numeric' }) }}</span>
                 <button @click="removeRule(item)" class="shrink-0 p-1.5 text-gray-400 hover:text-red-500 dark:hover:text-red-400 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors">
                     <Trash2 class="w-4 h-4" />
                 </button>

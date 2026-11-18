@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\Setting;
 use App\Services\SyncService;
 use App\Services\TwitchApiService;
+use Carbon\Carbon;
 use Illuminate\Console\Command;
 
 class SyncStreamsCommand extends Command
@@ -16,7 +17,7 @@ class SyncStreamsCommand extends Command
     public function handle(SyncService $sync, TwitchApiService $twitch): int
     {
         if (! $twitch->isConfigured()) {
-            $this->error('Twitch API credentials not configured. Please set them in Settings.');
+            $this->error(TwitchApiService::NOT_CONFIGURED.' Please set them in Settings.');
 
             return self::FAILURE;
         }
@@ -31,10 +32,10 @@ class SyncStreamsCommand extends Command
         // Check sync frequency (skip if --force)
         if (! $this->option('force')) {
             $lastSync = Setting::get('last_sync_at');
-            $frequency = (int) Setting::get('sync_frequency_minutes', 5);
+            $frequency = Setting::syncFrequencyMinutes();
 
             if ($lastSync) {
-                $lastSyncTime = \Carbon\Carbon::parse($lastSync);
+                $lastSyncTime = Carbon::parse($lastSync);
                 $nextAllowed = $lastSyncTime->addMinutes($frequency);
 
                 if (now()->lt($nextAllowed)) {

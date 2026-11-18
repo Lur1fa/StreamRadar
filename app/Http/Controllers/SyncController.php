@@ -6,16 +6,22 @@ use App\Models\Setting;
 use App\Services\SyncService;
 use App\Services\TwitchApiService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
 
 class SyncController extends Controller
 {
-    public function trigger(SyncService $sync, TwitchApiService $twitch): \Illuminate\Http\RedirectResponse
+    /**
+     * "Sync now" refreshes the signed-in account only; the scheduled sync
+     * keeps covering everyone.
+     */
+    public function trigger(Request $request, SyncService $sync, TwitchApiService $twitch): RedirectResponse
     {
         if (! $twitch->isConfigured()) {
-            return back()->with('error', 'Twitch API credentials not configured.');
+            return back()->with('error', TwitchApiService::NOT_CONFIGURED);
         }
 
-        $result = $sync->sync();
+        $result = $sync->syncAccount($request->user());
 
         return back()->with('success', "Sync complete: {$result->newStreams} new, {$result->updatedStreams} updated, {$result->endedStreams} ended.");
     }
@@ -24,7 +30,7 @@ class SyncController extends Controller
     {
         return response()->json([
             'last_sync_at' => Setting::get('last_sync_at'),
-            'sync_frequency_minutes' => Setting::get('sync_frequency_minutes', 5),
+            'sync_frequency_minutes' => Setting::syncFrequencyMinutes(),
         ]);
     }
 }

@@ -3,7 +3,6 @@
 use App\Models\AlertRule;
 use App\Models\BlacklistRule;
 use App\Models\Category;
-use App\Models\Setting;
 use App\Models\Stream;
 
 test('shares stats with correct counts', function () {
@@ -24,7 +23,7 @@ test('shares stats with correct counts', function () {
 });
 
 test('shares appSettings with theme', function () {
-    Setting::set('theme', 'dark');
+    setAccountSetting('theme', 'dark');
 
     $this->get('/')
         ->assertInertia(fn ($page) => $page
@@ -32,14 +31,17 @@ test('shares appSettings with theme', function () {
         );
 });
 
-test('shares appSettings with auth_enabled flag', function () {
-    Setting::set('auth_username', 'admin');
-    Setting::set('auth_password', bcrypt('pass'));
-
-    $this->withSession(['authenticated' => true])
-        ->get('/')
+test('shares the signed-in user without credentials or SSO identifiers', function () {
+    $this->get('/')
         ->assertInertia(fn ($page) => $page
-            ->where('appSettings.auth_enabled', true)
+            ->has('auth.user', fn ($user) => $user
+                ->has('id')->has('name')->has('email')
+                ->where('role', 'admin')
+                ->where('is_admin', true)
+                ->missing('password')
+                ->missing('oidc_subject')
+                ->etc()
+            )
         );
 });
 

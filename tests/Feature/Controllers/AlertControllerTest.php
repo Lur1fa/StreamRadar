@@ -5,6 +5,7 @@ use App\Models\Category;
 use App\Models\Stream;
 use App\Models\StreamAlertTracking;
 use App\Models\TrackedChannel;
+use App\Services\Notifications\DestinationType;
 use App\Services\TwitchApiService;
 
 test('GET /alerts returns 200 and lists alert rules', function () {
@@ -125,4 +126,23 @@ test('DELETE /alerts/{id} deletes rule and tracking', function () {
 
     $this->assertDatabaseMissing('alert_rules', ['id' => $rule->id]);
     expect(StreamAlertTracking::count())->toBe(0);
+});
+
+test('PUT /alerts/{id} saves every switch of the edit form, including "goes live"', function () {
+    $rule = AlertRule::factory()->create(['notify_on_stream_start' => true, 'notify_on_category_change' => true, 'notify_ntfy' => false]);
+
+    $this->put("/alerts/{$rule->id}", ['notify_on_stream_start' => false, 'notify_ntfy' => true])->assertRedirect();
+
+    expect($rule->fresh())
+        ->notify_on_stream_start->toBeFalse()
+        ->notify_ntfy->toBeTrue()
+        ->notify_on_category_change->toBeTrue();
+});
+
+test('GET /alerts ships the destination types and template fields from the server', function () {
+    $this->get('/alerts')->assertInertia(fn ($page) => $page
+        ->has('destinationTypes', count(DestinationType::cases()))
+        ->where('destinationTypes.0.flag', 'notify_ntfy')
+        ->where('templateFields.url', 'Twitch URL')
+    );
 });

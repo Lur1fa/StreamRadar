@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToOwner;
+use App\Support\Twitch;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -9,7 +11,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Stream extends Model
 {
-    use HasFactory;
+    use BelongsToOwner, HasFactory;
+
     protected $fillable = [
         'twitch_id',
         'user_id',
@@ -56,15 +59,11 @@ class Stream extends Model
 
     public function getThumbnailUrlSized(int $width = 440, int $height = 248): ?string
     {
-        if (! $this->thumbnail_url) {
-            return null;
-        }
-
-        return str_replace(['{width}', '{height}'], [$width, $height], $this->thumbnail_url);
+        return Twitch::sizedImage($this->thumbnail_url, $width, $height);
     }
 
     public function getTwitchUrl(): string
     {
-        return "https://www.twitch.tv/{$this->user_login}";
+        return Twitch::channelUrl((string) $this->user_login);
     }
 }

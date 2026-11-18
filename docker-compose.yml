@@ -2,15 +2,26 @@ services:
   streamradar:
     build: .
     ports:
-      - "${APP_PORT:-8080}:80"
+      # Bound to loopback by default. Set APP_BIND=0.0.0.0 in .env to expose on
+      # the network. Put a TLS reverse proxy in front and set APP_URL=https://…
+      # (all links and redirects are then built from APP_URL) and TRUSTED_PROXIES
+      # (so the real client IP is seen).
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8080}:80"
     volumes:
-      - ./database:/app/database
+      - ./database:/app/database:z
       - ./.git/refs:/app/.git-refs:ro
       - ./.git/HEAD:/app/.git-head:ro
+    # Optional operator overrides (OIDC_*, WEBHOOK_ALLOWED_HOSTS, TRUSTED_PROXIES, …).
+    # Values in `environment:` below always win over the file.
+    env_file:
+      - path: .env
+        required: false
     environment:
       - APP_ENV=production
       - APP_DEBUG=false
-      - APP_URL=http://localhost:${APP_PORT:-8080}
+      - APP_URL=${APP_URL:-http://localhost:${APP_PORT:-8080}}
+      - INERTIA_DEVTOOLS_ENABLED=false
+      - LOG_LEVEL=${LOG_LEVEL:-info}
       - MAIL_MAILER=smtp
       - MAIL_HOST=mailpit
       - MAIL_PORT=1025
@@ -21,6 +32,5 @@ services:
   mailpit:
     image: axllent/mailpit
     ports:
-      - "${MAILPIT_PORT:-8025}:8025"
+      - "127.0.0.1:${MAILPIT_PORT:-8025}:8025"
     restart: unless-stopped
-

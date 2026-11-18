@@ -26,14 +26,6 @@ test('set updates existing setting', function () {
     $this->assertDatabaseCount('settings', 1);
 });
 
-test('setMany sets multiple values', function () {
-    Setting::setMany(['a' => '1', 'b' => '2', 'c' => '3']);
-
-    expect(Setting::get('a'))->toBe('1')
-        ->and(Setting::get('b'))->toBe('2')
-        ->and(Setting::get('c'))->toBe('3');
-});
-
 test('getMany returns multiple values with defaults', function () {
     Setting::set('existing', 'yes');
 

@@ -3,8 +3,6 @@
 use App\Models\AlertRule;
 use App\Models\BlacklistRule;
 use App\Models\Category;
-use App\Models\HistoryEvent;
-use App\Models\Setting;
 use App\Models\Stream;
 use App\Models\StreamAlertTracking;
 use App\Models\TagFilter;
@@ -45,7 +43,7 @@ test('E2E: global min_viewers filters out streams below threshold', function () 
     $twitch = $this->mock(TwitchApiService::class);
     $this->mock(TwitchTrackerService::class);
 
-    Setting::set('global_min_viewers', '100');
+    setAccountSetting('global_min_viewers', '100');
 
     $category = Category::factory()->create(['use_global_filters' => true, 'filter_source' => 'global']);
 
@@ -68,7 +66,7 @@ test('E2E: global language filter only keeps matching streams', function () {
     $twitch = $this->mock(TwitchApiService::class);
     $this->mock(TwitchTrackerService::class);
 
-    Setting::set('global_languages', json_encode(['pl']));
+    setAccountSetting('global_languages', json_encode(['pl']));
 
     $category = Category::factory()->create(['use_global_filters' => true, 'filter_source' => 'global']);
 
@@ -93,7 +91,7 @@ test('E2E: tag filter min_viewers applies to tagged categories', function () {
     $twitch = $this->mock(TwitchApiService::class);
     $this->mock(TwitchTrackerService::class);
 
-    TagFilter::create(['tag' => 'retro', 'min_viewers' => 50]);
+    TagFilter::createFor(testOwner(), ['tag' => 'retro', 'min_viewers' => 50]);
 
     $category = Category::factory()->create([
         'tags' => ['retro'],
@@ -118,7 +116,7 @@ test('E2E: tag filter falls back to global when tag has no filter defined', func
     $twitch = $this->mock(TwitchApiService::class);
     $this->mock(TwitchTrackerService::class);
 
-    Setting::set('global_min_viewers', '200');
+    setAccountSetting('global_min_viewers', '200');
     // No TagFilter for 'indie' — should use global
 
     $category = Category::factory()->create([
@@ -148,7 +146,7 @@ test('E2E: custom category filters override global', function () {
     $twitch = $this->mock(TwitchApiService::class);
     $this->mock(TwitchTrackerService::class);
 
-    Setting::set('global_min_viewers', '500');
+    setAccountSetting('global_min_viewers', '500');
 
     $category = Category::factory()->create([
         'filter_source' => 'custom',
@@ -319,7 +317,7 @@ test('E2E: full pipeline — sync triggers alert and sends Discord notification'
     $twitch = $this->mock(TwitchApiService::class);
     $this->mock(TwitchTrackerService::class);
 
-    Setting::set('discord_webhook_url', 'https://discord.com/api/webhooks/test');
+    destination('discord', [], ['webhook_url' => 'https://discord.com/api/webhooks/test']);
 
     $category = Category::factory()->create();
     AlertRule::factory()->withDiscord()->create(['min_viewers' => 100]);
@@ -348,7 +346,7 @@ test('E2E: full pipeline — sync triggers alert and sends Email notification', 
     $twitch = $this->mock(TwitchApiService::class);
     $this->mock(TwitchTrackerService::class);
 
-    Setting::set('mail_to', 'test@example.com');
+    destination('email', ['to' => 'test@example.com']);
 
     $category = Category::factory()->create();
     AlertRule::factory()->withEmail()->create();
@@ -369,7 +367,7 @@ test('E2E: alert with category_tags only triggers for matching tagged category',
     $twitch = $this->mock(TwitchApiService::class);
     $this->mock(TwitchTrackerService::class);
 
-    Setting::set('discord_webhook_url', 'https://discord.com/api/webhooks/test');
+    destination('discord', [], ['webhook_url' => 'https://discord.com/api/webhooks/test']);
 
     $retro = Category::factory()->create(['tags' => ['retro']]);
     $fps = Category::factory()->create(['tags' => ['fps']]);
@@ -420,7 +418,7 @@ test('E2E: alert with notify_on_category_change triggers when game changes', fun
     $twitch = $this->mock(TwitchApiService::class);
     $this->mock(TwitchTrackerService::class);
 
-    Setting::set('discord_webhook_url', 'https://discord.com/api/webhooks/test');
+    destination('discord', [], ['webhook_url' => 'https://discord.com/api/webhooks/test']);
 
     $category = Category::factory()->create();
     AlertRule::factory()->withDiscord()->create(['notify_on_category_change' => true]);
@@ -479,7 +477,7 @@ test('E2E: tracked channel appears regardless of category filters', function () 
     $tracker = $this->mock(TwitchTrackerService::class);
     $tracker->shouldReceive('getAvgViewers')->andReturn(null);
 
-    Setting::set('global_min_viewers', '1000');
+    setAccountSetting('global_min_viewers', '1000');
 
     TrackedChannel::factory()->create(['user_login' => 'myfav']);
 
@@ -570,7 +568,7 @@ test('E2E: filtered stream removed silently without offline event after grace', 
     $twitch = $this->mock(TwitchApiService::class);
     $this->mock(TwitchTrackerService::class);
 
-    Setting::set('global_min_viewers', '100');
+    setAccountSetting('global_min_viewers', '100');
 
     $category = Category::factory()->create(['use_global_filters' => true, 'filter_source' => 'global']);
     Stream::factory()->forCategory($category)->create([
@@ -605,11 +603,11 @@ test('E2E: full scenario — multiple categories, filters, blacklist, alerts, no
     $tracker = $this->mock(TwitchTrackerService::class);
 
     // Setup
-    Setting::set('global_min_viewers', '50');
-    Setting::set('discord_webhook_url', 'https://discord.com/api/webhooks/test');
-    Setting::set('mail_to', 'admin@test.com');
+    setAccountSetting('global_min_viewers', '50');
+    destination('discord', [], ['webhook_url' => 'https://discord.com/api/webhooks/test']);
+    destination('email', ['to' => 'admin@test.com']);
 
-    TagFilter::create(['tag' => 'retro', 'min_viewers' => 5]);
+    TagFilter::createFor(testOwner(), ['tag' => 'retro', 'min_viewers' => 5]);
 
     $mainstream = Category::factory()->create([
         'filter_source' => 'global',

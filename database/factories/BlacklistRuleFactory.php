@@ -3,15 +3,19 @@
 namespace Database\Factories;
 
 use App\Models\BlacklistRule;
+use Database\Factories\Concerns\HasOwner;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 class BlacklistRuleFactory extends Factory
 {
+    use HasOwner;
+
     protected $model = BlacklistRule::class;
 
     public function definition(): array
     {
         return [
+            'owner_id' => $this->defaultOwner(),
             'type' => 'channel',
             'value' => strtolower(fake()->unique()->userName()),
             'twitch_user_id' => null,

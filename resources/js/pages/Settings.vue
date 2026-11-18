@@ -1,62 +1,116 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
-import { useForm, router } from '@inertiajs/vue3';
-import { Key, RefreshCw, Filter, Mail, Palette, Terminal, X, Plus, MessageCircle, Lock, ShieldOff, Webhook, Download, Upload, Send, Loader2, BotMessageSquare, ArrowUpCircle } from 'lucide-vue-next';
+import { useForm, router, Link } from '@inertiajs/vue3';
+import { Key, RefreshCw, Filter, Mail, Palette, X, Plus, Bell, Lock, Download, Upload, ArrowUpCircle } from 'lucide-vue-next';
 import AppLayout from '@/layouts/AppLayout.vue';
+import NotificationDestinations from '@/components/NotificationDestinations.vue';
+import FieldError from '@/components/FieldError.vue';
+import SecretHint from '@/components/SecretHint.vue';
 import { useTheme } from '@/composables/useTheme';
+import { useAuth } from '@/composables/useAuth';
+import { useChipInput } from '@/composables/useChipInput';
+import { parseJson, requestErrorMessage } from '@/utils';
+import type { DestinationTypeInfo, NotificationDestination } from '@/types';
 
-const props = defineProps<{ settings: Record<string, any>; activeCategoriesCount: number }>();
+const props = defineProps<{
+    settings: Record<string, any>;
+    destinations: NotificationDestination[];
+    destinationTypes: DestinationTypeInfo[];
+    activeCategoriesCount: number;
+    webhookAllowedHosts: string[];
+    emailAvailable: boolean;
+    /** Installation settings: administrators only (Setting::SERVER_KEYS). */
+    serverKeys: string[];
+}>();
 const { theme: currentTheme, setTheme } = useTheme();
+const { isAdmin } = useAuth();
+
+// Settings of the installation (Twitch keys, scanning, SMTP server) are shared
+// by all accounts and only an administrator sees or sends them. Everything
+// else on this page belongs to the signed-in account. Alert destinations are
+// saved on their own (NotificationDestinations), not with this form.
+// The server sends every value with its default already applied, so the
+// form shows exactly what the application uses.
+const value = (key: string): string => (props.settings[key] ?? '').toString();
 
 const form = useForm({
-    twitch_client_id: props.settings.twitch_client_id || '',
-    twitch_client_secret: props.settings.twitch_client_secret || '',
+    twitch_client_id: value('twitch_client_id'),
+    twitch_client_secret: '',
     auto_sync_enabled: props.settings.auto_sync_enabled !== '0' && props.settings.auto_sync_enabled !== false,
-    sync_frequency_minutes: props.settings.sync_frequency_minutes || '1',
-    global_min_viewers: props.settings.global_min_viewers || '0',
-    global_min_avg_viewers: props.settings.global_min_avg_viewers || '0',
-    global_languages: props.settings.global_languages || '[]',
-    global_keywords: props.settings.global_keywords || '[]',
-    theme: props.settings.theme || 'system',
-    mail_to: props.settings.mail_to || '',
-    smtp_host: props.settings.smtp_host || 'mailpit',
-    smtp_port: props.settings.smtp_port || '1025',
-    smtp_username: props.settings.smtp_username || '',
-    smtp_password: props.settings.smtp_password || '',
-    smtp_encryption: props.settings.smtp_encryption || '',
-    mail_from_address: props.settings.mail_from_address || 'streamradar@localhost',
-    mail_from_name: props.settings.mail_from_name || 'StreamRadar',
-    discord_webhook_url: props.settings.discord_webhook_url || '',
-    telegram_bot_token: props.settings.telegram_bot_token || '',
-    telegram_chat_id: props.settings.telegram_chat_id || '',
-    webhook_url: props.settings.webhook_url || '',
-    notifications_email_enabled: props.settings.notifications_email_enabled !== '0',
-    notifications_discord_enabled: props.settings.notifications_discord_enabled !== '0',
-    notifications_telegram_enabled: props.settings.notifications_telegram_enabled !== '0',
-    notifications_webhook_enabled: props.settings.notifications_webhook_enabled !== '0',
-    auth_username: props.settings.auth_username || '',
-    auth_password: '',
+    sync_frequency_minutes: value('sync_frequency_minutes'),
+    global_min_viewers: value('global_min_viewers'),
+    global_min_avg_viewers: value('global_min_avg_viewers'),
+    global_languages: value('global_languages'),
+    global_keywords: value('global_keywords'),
+    theme: value('theme'),
+    smtp_host: value('smtp_host'),
+    smtp_port: value('smtp_port'),
+    smtp_username: value('smtp_username'),
+    smtp_password: '',
+    smtp_encryption: value('smtp_encryption'),
+    mail_from_address: value('mail_from_address'),
+    mail_from_name: value('mail_from_name'),
+    clear_secrets: [] as string[],
 });
 
-const globalLangs = ref<string[]>((() => { try { return JSON.parse(form.global_languages || '[]'); } catch { return []; } })());
-const globalKws = ref<string[]>((() => { try { return JSON.parse(form.global_keywords || '[]'); } catch { return []; } })());
-const langInput = ref(''); const kwInput = ref('');
+form.transform((data) => isAdmin.value
+    ? data
+    : Object.fromEntries(Object.entries(data).filter(([key]) => !props.serverKeys.includes(key))) as typeof data);
 
-const initialLangs = computed<string[]>(() => { try { return JSON.parse(props.settings.global_languages || '[]'); } catch { return []; } });
-const initialKws = computed<string[]>(() => { try { return JSON.parse(props.settings.global_keywords || '[]'); } catch { return []; } });
+// Secrets are never sent to the browser. The server only tells us whether a
+// value is stored (`<key>_set`) and a mask (`<key>_masked`). Leaving a secret
+// field empty keeps the stored value; "remove" clears it on save.
+type SecretKey = string;
+function secretSet(key: SecretKey): boolean { return !!props.settings[`${key}_set`] && !form.clear_secrets.includes(key); }
+function secretMask(key: SecretKey): string { return props.settings[`${key}_masked`] || ''; }
+function clearSecret(key: SecretKey) { if (!form.clear_secrets.includes(key)) form.clear_secrets.push(key); (form as any)[key] = ''; }
+function undoClear(key: SecretKey) { form.clear_secrets = form.clear_secrets.filter(k => k !== key); }
+
+
+// Languages and keywords are stored as JSON strings and edited as chips.
+const globalLangs = ref<string[]>(parseJson(form.global_languages, []));
+const globalKws = ref<string[]>(parseJson(form.global_keywords, []));
+const { input: langInput, add: addLang, remove: removeLang } = useChipInput(() => globalLangs.value, v => (globalLangs.value = v), { lowercase: true });
+const { input: kwInput, add: addKw, remove: removeKw } = useChipInput(() => globalKws.value, v => (globalKws.value = v));
+
+const initialLangs = computed<string[]>(() => parseJson(props.settings.global_languages, []));
+const initialKws = computed<string[]>(() => parseJson(props.settings.global_keywords, []));
 const isFormDirty = computed(() => form.isDirty || JSON.stringify(globalLangs.value) !== JSON.stringify(initialLangs.value) || JSON.stringify(globalKws.value) !== JSON.stringify(initialKws.value));
 
-function addLang() { const v = langInput.value.trim().toLowerCase(); if (v && !globalLangs.value.includes(v)) globalLangs.value.push(v); langInput.value = ''; }
-function removeLang(l: string) { globalLangs.value = globalLangs.value.filter(x => x !== l); }
-function addKw() { const v = kwInput.value.trim(); if (v && !globalKws.value.includes(v)) globalKws.value.push(v); kwInput.value = ''; }
-function removeKw(k: string) { globalKws.value = globalKws.value.filter(x => x !== k); }
-
-function saveSettings() {
+/** Put the chip lists back into the form before it is sent. */
+function syncLists() {
     form.global_languages = JSON.stringify(globalLangs.value);
     form.global_keywords = JSON.stringify(globalKws.value);
+}
+
+// Validation errors come back per field. They are shown under the field and
+// summarised in the save bar, so a rejected value is never silently dropped.
+const FIELD_LABELS: Record<string, string> = {
+    twitch_client_id: 'Twitch Client ID', twitch_client_secret: 'Twitch Client Secret',
+    auto_sync_enabled: 'Auto scanning', sync_frequency_minutes: 'Scan frequency',
+    global_min_viewers: 'Min viewers', global_min_avg_viewers: 'Min avg viewers',
+    global_languages: 'Languages', global_keywords: 'Keywords', theme: 'Theme',
+    smtp_host: 'SMTP host', smtp_port: 'SMTP port',
+    smtp_username: 'SMTP username', smtp_password: 'SMTP password', smtp_encryption: 'SMTP encryption',
+    mail_from_address: 'From address', mail_from_name: 'From name',
+};
+const errorList = computed(() => Object.entries(form.errors as Record<string, string>)
+    .map(([key, message]) => ({ key, label: FIELD_LABELS[key] ?? key, message })));
+
+function scrollToFirstError() {
+    const first = errorList.value[0];
+    if (!first) return;
+    const el = document.querySelector(`[data-field="${first.key}"]`) as HTMLElement | null;
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el?.focus({ preventScroll: true });
+}
+
+function saveSettings() {
+    syncLists();
     form.put('/settings', {
         preserveScroll: true,
         onSuccess: () => { if (form.theme !== currentTheme.value) setTheme(form.theme as any); },
+        onError: () => { scrollToFirstError(); },
     });
 }
 
@@ -64,64 +118,18 @@ const testing = ref(false);
 const testResult = ref<{ success: boolean; message: string } | null>(null);
 async function testTwitch() {
     testing.value = true; testResult.value = null;
-    form.global_languages = JSON.stringify(globalLangs.value);
-    form.global_keywords = JSON.stringify(globalKws.value);
+    syncLists();
     form.put('/settings', {
         preserveScroll: true,
         onSuccess: async () => {
             try {
                 const { data } = await window.axios.post('/settings/test-twitch');
                 testResult.value = data;
-            } catch (e: any) { testResult.value = { success: false, message: e.response?.data?.message || e.message || 'Request failed' }; }
+            } catch (e) { testResult.value = { success: false, message: requestErrorMessage(e) }; }
             finally { testing.value = false; }
         },
         onError: () => { testResult.value = { success: false, message: 'Failed to save settings' }; testing.value = false; },
     });
-}
-
-// Test notifications
-const testingEmail = ref(false);
-const testEmailResult = ref<{ success: boolean; message: string } | null>(null);
-const testingDiscord = ref(false);
-const testDiscordResult = ref<{ success: boolean; message: string } | null>(null);
-const testingTelegram = ref(false);
-const testTelegramResult = ref<{ success: boolean; message: string } | null>(null);
-const testingWebhook = ref(false);
-const testWebhookResult = ref<{ success: boolean; message: string } | null>(null);
-
-async function testNotification(channel: 'email' | 'discord' | 'telegram' | 'webhook') {
-    const loading = { email: testingEmail, discord: testingDiscord, telegram: testingTelegram, webhook: testingWebhook }[channel];
-    const result = { email: testEmailResult, discord: testDiscordResult, telegram: testTelegramResult, webhook: testWebhookResult }[channel];
-    loading.value = true; result.value = null;
-    try {
-        const { data } = await window.axios.post(`/settings/test-${channel}`);
-        result.value = data;
-    } catch (e: any) {
-        result.value = { success: false, message: e.response?.data?.message || e.message || 'Request failed' };
-    } finally {
-        loading.value = false;
-    }
-}
-
-// Disable auth
-const showDisableAuth = ref(false);
-const disablePassword = ref('');
-const disableError = ref('');
-const disabling = ref(false);
-
-async function disableAuth() {
-    disableError.value = '';
-    disabling.value = true;
-    try {
-        await window.axios.post('/settings/disable-auth', { password: disablePassword.value });
-        showDisableAuth.value = false;
-        disablePassword.value = '';
-        router.reload();
-    } catch (e: any) {
-        disableError.value = e.response?.data?.message || 'Invalid password';
-    } finally {
-        disabling.value = false;
-    }
 }
 
 // Export / Import
@@ -177,19 +185,17 @@ async function checkForUpdate() {
 }
 
 // Sidebar scroll spy
-const activeSection = ref('twitch');
+const activeSection = ref(isAdmin.value ? 'twitch' : 'filters');
 const sections = [
-    { id: 'twitch', label: 'Twitch API', icon: Key },
-    { id: 'sync', label: 'Scanning', icon: RefreshCw },
+    { id: 'twitch', label: 'Twitch API', icon: Key, adminOnly: true },
+    { id: 'sync', label: 'Scanning', icon: RefreshCw, adminOnly: true },
     { id: 'filters', label: 'Global Filters', icon: Filter },
-    { id: 'email', label: 'Email / SMTP', icon: Mail },
-    { id: 'discord', label: 'Discord', icon: MessageCircle },
-    { id: 'telegram', label: 'Telegram', icon: BotMessageSquare },
-    { id: 'webhook', label: 'Webhook', icon: Webhook },
-    { id: 'auth', label: 'Access', icon: Lock },
-    { id: 'backup', label: 'Backup', icon: Download },
+    { id: 'notifications', label: 'Notifications', icon: Bell },
+    { id: 'mail', label: 'Mail Server', icon: Mail, adminOnly: true },
+    { id: 'auth', label: 'Access', icon: Lock, adminOnly: true },
+    { id: 'backup', label: 'Backup', icon: Download, adminOnly: true },
     { id: 'appearance', label: 'Appearance', icon: Palette },
-];
+].filter((section) => !section.adminOnly || isAdmin.value);
 
 function scrollTo(id: string) {
     activeSection.value = id;
@@ -197,7 +203,7 @@ function scrollTo(id: string) {
 }
 
 onMounted(() => {
-    checkForUpdate();
+    if (isAdmin.value) checkForUpdate();
     const observer = new IntersectionObserver((entries) => {
         for (const entry of entries) {
             if (entry.isIntersecting) {
@@ -224,7 +230,7 @@ onMounted(() => {
                         :class="[
                             'flex items-center gap-2 w-full px-3 py-2 text-sm font-medium rounded-lg transition-colors text-left',
                             activeSection === s.id
-                                ? 'bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400'
+                                ? 'accent-soft'
                                 : 'text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200 hover:bg-gray-50 dark:hover:bg-zinc-800'
                         ]"
                     >
@@ -255,7 +261,7 @@ onMounted(() => {
                         <button v-for="s in sections" :key="s.id" @click="scrollTo(s.id)"
                             :class="['flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg whitespace-nowrap transition-colors shrink-0',
                                 activeSection === s.id
-                                    ? 'bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400'
+                                    ? 'accent-soft'
                                     : 'text-gray-500 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800']">
                             <component :is="s.icon" class="w-3.5 h-3.5" />
                             {{ s.label }}
@@ -263,22 +269,26 @@ onMounted(() => {
                     </div>
                 </div>
 
-                <!-- Twitch API -->
-                <div id="section-twitch" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
+                <!-- Twitch API (installation) -->
+                <div v-if="isAdmin" id="section-twitch" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
                     <div class="flex items-center gap-2 mb-4">
                         <Key class="w-5 h-5 text-purple-500" />
                         <h3 class="text-lg font-bold text-gray-900 dark:text-white">Twitch API</h3>
+                        <span class="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400" v-tooltip="'Shared by every account. Only administrators can change it.'">all accounts</span>
                     </div>
                     <div class="space-y-4">
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Client ID</label>
-                            <input v-model="form.twitch_client_id" type="text" placeholder="Your Twitch Client ID"
+                            <input v-model="form.twitch_client_id" :data-field="'twitch_client_id'" :aria-invalid="!!form.errors.twitch_client_id" type="text" placeholder="Your Twitch Client ID"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <FieldError :message="form.errors.twitch_client_id" />
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Client Secret</label>
-                            <input v-model="form.twitch_client_secret" type="password" :placeholder="settings.twitch_client_secret_masked || 'Your Twitch Client Secret'"
+                            <input v-model="form.twitch_client_secret" :data-field="'twitch_client_secret'" :aria-invalid="!!form.errors.twitch_client_secret" type="password" autocomplete="new-password" :placeholder="secretSet('twitch_client_secret') ? 'Leave empty to keep the stored secret' : 'Your Twitch Client Secret'"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <FieldError :message="form.errors.twitch_client_secret" />
+                            <SecretHint :stored="secretSet('twitch_client_secret')" :removing="form.clear_secrets.includes('twitch_client_secret')" :mask="secretMask('twitch_client_secret')" @remove="clearSecret('twitch_client_secret')" @undo="undoClear('twitch_client_secret')" />
                         </div>
                         <div class="flex items-center gap-3">
                             <button @click="testTwitch" :disabled="testing"
@@ -290,12 +300,13 @@ onMounted(() => {
                     </div>
                 </div>
 
-                <!-- Sync -->
-                <div id="section-sync" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
+                <!-- Sync (installation) -->
+                <div v-if="isAdmin" id="section-sync" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
                     <div class="flex items-center justify-between mb-4">
                         <div class="flex items-center gap-2">
                             <RefreshCw class="w-5 h-5 text-purple-500" />
                             <h3 class="text-lg font-bold text-gray-900 dark:text-white">Auto Scanning</h3>
+                            <span class="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400" v-tooltip="'Shared by every account. Only administrators can change it.'">all accounts</span>
                         </div>
                         <label class="flex items-center gap-2 cursor-pointer">
                             <input type="checkbox" v-model="form.auto_sync_enabled" class="rounded text-purple-600 focus:ring-purple-500 bg-white dark:bg-zinc-800" />
@@ -307,10 +318,11 @@ onMounted(() => {
                             <label class="text-xs font-medium text-gray-600 dark:text-zinc-400">Scan Frequency</label>
                             <span class="text-sm font-semibold text-purple-600 dark:text-purple-400">{{ form.sync_frequency_minutes }} min</span>
                         </div>
-                        <input v-model="form.sync_frequency_minutes" type="range" min="1" max="60" step="1"
+                        <input v-model="form.sync_frequency_minutes" :data-field="'sync_frequency_minutes'" :aria-invalid="!!form.errors.sync_frequency_minutes" type="range" min="1" max="60" step="1"
                             class="w-full h-2 rounded-full appearance-none cursor-pointer bg-gray-200 dark:bg-zinc-700 accent-purple-600
                             [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-600 [&::-webkit-slider-thumb]:shadow-md [&::-webkit-slider-thumb]:hover:bg-purple-500 [&::-webkit-slider-thumb]:transition-colors
                             [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-purple-600 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:shadow-md" />
+                        <FieldError :message="form.errors.sync_frequency_minutes" />
                         <div class="flex justify-between mt-1 text-[10px] text-gray-400 dark:text-zinc-600">
                             <span>1 min</span>
                             <span>15</span>
@@ -347,18 +359,20 @@ onMounted(() => {
                         <Filter class="w-5 h-5 text-purple-500" />
                         <h3 class="text-lg font-bold text-gray-900 dark:text-white">Global Filters</h3>
                     </div>
-                    <p class="text-xs text-gray-500 dark:text-zinc-500 mb-4">Default filters for categories using global settings.</p>
+                    <p class="text-xs text-gray-500 dark:text-zinc-500 mb-4">Your default filters, applied to your categories that use global settings.</p>
                     <div class="space-y-4">
                         <div class="grid grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Minimum Viewers</label>
-                                <input v-model="form.global_min_viewers" type="number" min="0"
+                                <input v-model="form.global_min_viewers" :data-field="'global_min_viewers'" :aria-invalid="!!form.errors.global_min_viewers" type="number" min="0"
                                     class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                                <FieldError :message="form.errors.global_min_viewers" />
                             </div>
                             <div>
                                 <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Min Avg Viewers <span class="font-normal text-gray-400 dark:text-zinc-600">TwitchTracker</span></label>
-                                <input v-model="form.global_min_avg_viewers" type="number" min="0"
+                                <input v-model="form.global_min_avg_viewers" :data-field="'global_min_avg_viewers'" :aria-invalid="!!form.errors.global_min_avg_viewers" type="number" min="0"
                                     class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                                <FieldError :message="form.errors.global_min_avg_viewers" />
                             </div>
                         </div>
                         <div>
@@ -390,33 +404,31 @@ onMounted(() => {
                     </div>
                 </div>
 
-                <!-- Email / SMTP -->
-                <div id="section-email" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
-                    <div class="flex items-center justify-between mb-4">
-                        <div class="flex items-center gap-2">
-                            <Mail class="w-5 h-5 text-purple-500" />
-                            <h3 class="text-lg font-bold text-gray-900 dark:text-white">Email / SMTP</h3>
-                        </div>
-                        <label class="flex items-center gap-2">
-                            <input type="checkbox" v-model="form.notifications_email_enabled" class="rounded text-purple-600 focus:ring-purple-500 bg-white dark:bg-zinc-800" />
-                            <span class="text-xs font-medium text-gray-500 dark:text-zinc-400">Enabled</span>
-                        </label>
+                <!-- Notifications: the account's alert destinations -->
+                <div id="section-notifications" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
+                    <NotificationDestinations :destinations="destinations" :types="destinationTypes" :email-available="emailAvailable" />
+                </div>
+
+                <!-- Mail server (installation) -->
+                <div v-if="isAdmin" id="section-mail" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
+                    <div class="flex items-center gap-2 mb-1">
+                        <Mail class="w-5 h-5 text-purple-500" />
+                        <h3 class="text-lg font-bold text-gray-900 dark:text-white">Mail Server</h3>
+                        <span class="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400" v-tooltip="'Shared by every account. Only administrators can change it.'">all accounts</span>
                     </div>
+                    <p class="text-xs text-gray-500 dark:text-zinc-500 mb-4">Every account's Email destinations are sent through this SMTP server. Save, then use the test button of an Email destination to try it.</p>
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
-                            <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Recipient Email</label>
-                            <input v-model="form.mail_to" type="email" placeholder="you@example.com"
-                                class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
-                        </div>
-                        <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">SMTP Host</label>
-                            <input v-model="form.smtp_host" type="text" placeholder="smtp.example.com"
+                            <input v-model="form.smtp_host" :data-field="'smtp_host'" :aria-invalid="!!form.errors.smtp_host" type="text" placeholder="smtp.example.com"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <FieldError :message="form.errors.smtp_host" />
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">SMTP Port</label>
-                            <input v-model="form.smtp_port" type="text" placeholder="587"
+                            <input v-model="form.smtp_port" :data-field="'smtp_port'" :aria-invalid="!!form.errors.smtp_port" type="text" placeholder="587"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <FieldError :message="form.errors.smtp_port" />
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Encryption</label>
@@ -426,190 +438,64 @@ onMounted(() => {
                                 <option value="ssl">SSL</option>
                                 <option value="">None</option>
                             </select>
+                            <FieldError :message="form.errors.smtp_encryption" />
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">SMTP Username</label>
-                            <input v-model="form.smtp_username" type="text"
+                            <input v-model="form.smtp_username" :data-field="'smtp_username'" :aria-invalid="!!form.errors.smtp_username" type="text"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <FieldError :message="form.errors.smtp_username" />
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">SMTP Password</label>
-                            <input v-model="form.smtp_password" type="password"
+                            <input v-model="form.smtp_password" :data-field="'smtp_password'" :aria-invalid="!!form.errors.smtp_password" type="password" autocomplete="new-password" :placeholder="secretSet('smtp_password') ? 'Leave empty to keep the stored password' : ''"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <FieldError :message="form.errors.smtp_password" />
+                            <SecretHint :stored="secretSet('smtp_password')" :removing="form.clear_secrets.includes('smtp_password')" :mask="secretMask('smtp_password')" @remove="clearSecret('smtp_password')" @undo="undoClear('smtp_password')" />
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">From Address</label>
-                            <input v-model="form.mail_from_address" type="email" placeholder="noreply@example.com"
+                            <input v-model="form.mail_from_address" :data-field="'mail_from_address'" :aria-invalid="!!form.errors.mail_from_address" type="email" placeholder="noreply@example.com"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <FieldError :message="form.errors.mail_from_address" />
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">From Name</label>
-                            <input v-model="form.mail_from_name" type="text" placeholder="StreamRadar"
+                            <input v-model="form.mail_from_name" :data-field="'mail_from_name'" :aria-invalid="!!form.errors.mail_from_name" type="text" placeholder="StreamRadar"
                                 class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
+                            <FieldError :message="form.errors.mail_from_name" />
                         </div>
-                    </div>
-                    <div class="flex items-center gap-3 mt-4">
-                        <button @click="testNotification('email')" :disabled="testingEmail"
-                            class="px-4 py-2 text-sm font-medium bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-zinc-300 rounded-lg hover:bg-gray-200 dark:hover:bg-zinc-700 disabled:opacity-50 transition-colors flex items-center gap-1.5">
-                            <Loader2 v-if="testingEmail" class="w-3.5 h-3.5 animate-spin" />
-                            <Send v-else class="w-3.5 h-3.5" />
-                            {{ testingEmail ? 'Sending...' : 'Send Test Email' }}
-                        </button>
-                        <span v-if="testEmailResult" :class="testEmailResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'" class="text-sm">{{ testEmailResult.message }}</span>
                     </div>
                 </div>
 
-                <!-- Discord -->
-                <div id="section-discord" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
-                    <div class="flex items-center justify-between mb-4">
-                        <div class="flex items-center gap-2">
-                            <MessageCircle class="w-5 h-5 text-purple-500" />
-                            <h3 class="text-lg font-bold text-gray-900 dark:text-white">Discord</h3>
-                        </div>
-                        <label class="flex items-center gap-2">
-                            <input type="checkbox" v-model="form.notifications_discord_enabled" class="rounded text-purple-600 focus:ring-purple-500 bg-white dark:bg-zinc-800" />
-                            <span class="text-xs font-medium text-gray-500 dark:text-zinc-400">Enabled</span>
-                        </label>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Webhook URL</label>
-                        <input v-model="form.discord_webhook_url" autocomplete="off" type="text" placeholder="https://discord.com/api/webhooks/..."
-                            class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
-                        <p class="mt-2 text-xs text-gray-400 dark:text-zinc-500">
-                            Create a webhook in your Discord server: Server Settings &rarr; Integrations &rarr; Webhooks &rarr; New Webhook. Copy the URL and paste it here.
-                        </p>
-                    </div>
-                    <div class="flex items-center gap-3 mt-4">
-                        <button @click="testNotification('discord')" :disabled="testingDiscord"
-                            class="px-4 py-2 text-sm font-medium bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-zinc-300 rounded-lg hover:bg-gray-200 dark:hover:bg-zinc-700 disabled:opacity-50 transition-colors flex items-center gap-1.5">
-                            <Loader2 v-if="testingDiscord" class="w-3.5 h-3.5 animate-spin" />
-                            <Send v-else class="w-3.5 h-3.5" />
-                            {{ testingDiscord ? 'Sending...' : 'Send Test Message' }}
-                        </button>
-                        <span v-if="testDiscordResult" :class="testDiscordResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'" class="text-sm">{{ testDiscordResult.message }}</span>
-                    </div>
-                </div>
-
-                <!-- Telegram -->
-                <div id="section-telegram" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
-                    <div class="flex items-center justify-between mb-4">
-                        <div class="flex items-center gap-2">
-                            <BotMessageSquare class="w-5 h-5 text-purple-500" />
-                            <h3 class="text-lg font-bold text-gray-900 dark:text-white">Telegram</h3>
-                        </div>
-                        <label class="flex items-center gap-2">
-                            <input type="checkbox" v-model="form.notifications_telegram_enabled" class="rounded text-purple-600 focus:ring-purple-500 bg-white dark:bg-zinc-800" />
-                            <span class="text-xs font-medium text-gray-500 dark:text-zinc-400">Enabled</span>
-                        </label>
-                    </div>
-                    <div class="space-y-4">
-                        <div>
-                            <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Bot Token</label>
-                            <input v-model="form.telegram_bot_token" type="password" :placeholder="settings.telegram_bot_token_masked || 'Paste token from @BotFather'"
-                                class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Chat ID</label>
-                            <input v-model="form.telegram_chat_id" autocomplete="off" type="text" placeholder="Your numeric chat ID"
-                                class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
-                        </div>
-                        <p class="text-xs text-gray-400 dark:text-zinc-500">
-                            Create a bot via <strong>@BotFather</strong> on Telegram, then send /start to your bot and enter the chat ID here.
-                        </p>
-                    </div>
-                    <div class="flex items-center gap-3 mt-4">
-                        <button @click="testNotification('telegram')" :disabled="testingTelegram"
-                            class="px-4 py-2 text-sm font-medium bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-zinc-300 rounded-lg hover:bg-gray-200 dark:hover:bg-zinc-700 disabled:opacity-50 transition-colors flex items-center gap-1.5">
-                            <Loader2 v-if="testingTelegram" class="w-3.5 h-3.5 animate-spin" />
-                            <Send v-else class="w-3.5 h-3.5" />
-                            {{ testingTelegram ? 'Sending...' : 'Send Test Message' }}
-                        </button>
-                        <span v-if="testTelegramResult" :class="testTelegramResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'" class="text-sm">{{ testTelegramResult.message }}</span>
-                    </div>
-                </div>
-
-                <!-- Webhook -->
-                <div id="section-webhook" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
-                    <div class="flex items-center justify-between mb-4">
-                        <div class="flex items-center gap-2">
-                            <Webhook class="w-5 h-5 text-purple-500" />
-                            <h3 class="text-lg font-bold text-gray-900 dark:text-white">Webhook</h3>
-                        </div>
-                        <label class="flex items-center gap-2">
-                            <input type="checkbox" v-model="form.notifications_webhook_enabled" class="rounded text-purple-600 focus:ring-purple-500 bg-white dark:bg-zinc-800" />
-                            <span class="text-xs font-medium text-gray-500 dark:text-zinc-400">Enabled</span>
-                        </label>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Webhook URL</label>
-                        <input v-model="form.webhook_url" autocomplete="off" type="text" placeholder="https://ntfy.sh/your-topic or any URL..."
-                            class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
-                        <p class="mt-2 text-xs text-gray-400 dark:text-zinc-500">
-                            Receives POST with JSON payload for every alert. Works with ntfy.sh, Zapier, Make, or any custom endpoint.
-                        </p>
-                    </div>
-                    <div class="flex items-center gap-3 mt-4">
-                        <button @click="testNotification('webhook')" :disabled="testingWebhook"
-                            class="px-4 py-2 text-sm font-medium bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-zinc-300 rounded-lg hover:bg-gray-200 dark:hover:bg-zinc-700 disabled:opacity-50 transition-colors flex items-center gap-1.5">
-                            <Loader2 v-if="testingWebhook" class="w-3.5 h-3.5 animate-spin" />
-                            <Send v-else class="w-3.5 h-3.5" />
-                            {{ testingWebhook ? 'Sending...' : 'Send Test Webhook' }}
-                        </button>
-                        <span v-if="testWebhookResult" :class="testWebhookResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'" class="text-sm">{{ testWebhookResult.message }}</span>
-                    </div>
-                </div>
-
-                <!-- Access / Auth -->
-                <div id="section-auth" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
+                <!-- Access / Auth (installation) -->
+                <div v-if="isAdmin" id="section-auth" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
                     <div class="flex items-center gap-2 mb-4">
                         <Lock class="w-5 h-5 text-purple-500" />
                         <h3 class="text-lg font-bold text-gray-900 dark:text-white">Access Control</h3>
                     </div>
-                    <p class="text-xs text-gray-500 dark:text-zinc-500 mb-4">
-                        {{ settings.auth_enabled ? 'Authentication is enabled. Leave password empty to keep current.' : 'No password set — app is open. Set credentials to require login.' }}
-                    </p>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                            <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Username</label>
-                            <input v-model="form.auth_username" autocomplete="off" type="text" placeholder="admin"
-                                class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-gray-600 dark:text-zinc-400 mb-1">Password</label>
-                            <input v-model="form.auth_password" type="password" :placeholder="settings.auth_enabled ? '••••••••' : 'Set password to enable'"
-                                class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500" />
-                        </div>
-                    </div>
-                    <!-- Disable auth -->
-                    <div v-if="settings.auth_enabled" class="mt-4">
-                        <button v-if="!showDisableAuth" @click="showDisableAuth = true"
-                            class="px-4 py-2 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors flex items-center gap-1.5">
-                            <ShieldOff class="w-4 h-4" /> Disable Access Control
-                        </button>
-                        <div v-else class="flex items-center gap-2 mt-2">
-                            <input v-model="disablePassword" type="password" placeholder="Confirm current password"
-                                class="flex-1 max-w-xs px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-red-500"
-                                @keydown.enter="disableAuth" />
-                            <button @click="disableAuth" :disabled="disabling || !disablePassword"
-                                class="px-4 py-2 text-sm font-medium bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors">
-                                Confirm
-                            </button>
-                            <button @click="showDisableAuth = false; disablePassword = ''; disableError = ''"
-                                class="px-3 py-2 text-sm text-gray-500 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-lg transition-colors">
-                                Cancel
-                            </button>
-                        </div>
-                        <p v-if="disableError" class="text-xs text-red-500 mt-2">{{ disableError }}</p>
+                    <div class="space-y-3 text-xs text-gray-500 dark:text-zinc-500">
+                        <p>
+                            Signing in is always required. Accounts and roles are managed on the
+                            <Link href="/users" class="text-purple-600 dark:text-purple-400 hover:underline">Users</Link> page;
+                            change your own password under <Link href="/account" class="text-purple-600 dark:text-purple-400 hover:underline">Account</Link>.
+                            Single sign-on (OpenID Connect) is configured on the server through <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-zinc-800">OIDC_*</code> environment variables.
+                        </p>
+                        <p>
+                            Outbound webhooks may only target public internet addresses. Private hosts explicitly allowed via
+                            <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-zinc-800">WEBHOOK_ALLOWED_HOSTS</code>:
+                            <span class="font-mono">{{ webhookAllowedHosts.length ? webhookAllowedHosts.join(', ') : 'none' }}</span>
+                        </p>
                     </div>
                 </div>
 
-                <!-- Backup -->
-                <div id="section-backup" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
+                <!-- Backup (administrators) -->
+                <div v-if="isAdmin" id="section-backup" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
                     <div class="flex items-center gap-2 mb-4">
                         <Download class="w-5 h-5 text-purple-500" />
                         <h3 class="text-lg font-bold text-gray-900 dark:text-white">Backup</h3>
                     </div>
-                    <p class="text-xs text-gray-500 dark:text-zinc-500 mb-4">Export or import all settings, tracked categories, channels, and blacklist rules.</p>
+                    <p class="text-xs text-gray-500 dark:text-zinc-500 mb-4">Export or import the installation settings and your own account's settings, tracked categories, channels, blacklist, alerts and alert destinations. Other accounts' data is not included. Secrets are never exported, so an imported destination may need its token or URL again.</p>
                     <div class="flex gap-3">
                         <button @click="exportConfig"
                             class="px-4 py-2 text-sm font-medium bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-zinc-300 rounded-lg hover:bg-gray-200 dark:hover:bg-zinc-700 transition-colors flex items-center gap-1.5">
@@ -642,7 +528,7 @@ onMounted(() => {
                 </div>
 
                 <!-- Spacer for sticky bar -->
-                <div v-if="isFormDirty" class="h-20"></div>
+                <div v-if="isFormDirty || errorList.length" :class="errorList.length ? 'h-40' : 'h-20'"></div>
             </div>
         </div>
 
@@ -655,8 +541,14 @@ onMounted(() => {
             leave-from-class="translate-y-0 opacity-100"
             leave-to-class="translate-y-full opacity-0"
         >
-            <div v-if="isFormDirty" class="fixed bottom-0 left-0 right-0 z-30 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md py-3 px-4">
-                <div class="max-w-7xl mx-auto flex justify-end">
+            <div v-if="isFormDirty || errorList.length" class="fixed bottom-0 left-0 right-0 z-30 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md py-3 px-4" style="padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px))">
+                <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-end gap-3">
+                    <div v-if="errorList.length" role="alert" class="flex-1 min-w-0 text-sm text-red-600 dark:text-red-400">
+                        <button type="button" @click="scrollToFirstError" class="font-medium hover:underline">Not saved: {{ errorList.length === 1 ? 'one field needs attention' : `${errorList.length} fields need attention` }}</button>
+                        <ul class="text-xs mt-0.5">
+                            <li v-for="e in errorList" :key="e.key" class="truncate"><span class="font-medium">{{ e.label }}:</span> {{ e.message }}</li>
+                        </ul>
+                    </div>
                     <button @click="saveSettings" :disabled="form.processing"
                         class="px-6 py-2.5 text-sm font-medium bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors shadow-lg">
                         {{ form.processing ? 'Saving...' : 'Save Settings' }}

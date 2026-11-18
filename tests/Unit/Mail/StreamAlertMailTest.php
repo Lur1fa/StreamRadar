@@ -67,3 +67,37 @@ test('HTML content includes category name', function () {
 
     expect($html)->toContain('Fortnite');
 });
+
+test('malicious stream titles and names are HTML-escaped in the e-mail', function () {
+    $stream = Stream::factory()->create([
+        'user_name' => '<script>alert(1)</script>Evil',
+        'title' => '<img src=x onerror=alert(1)> watch now',
+        'game_name' => '"><b>pwn</b>',
+    ]);
+    $rule = AlertRule::factory()->create();
+
+    $html = (new StreamAlertMail([['rule' => $rule, 'stream' => $stream]]))->render();
+
+    expect($html)->not->toContain('<script>alert(1)</script>')
+        ->and($html)->not->toContain('<img src=x onerror=alert(1)>')
+        ->and($html)->toContain('&lt;script&gt;')
+        ->and($html)->toContain('&lt;img src=x');
+});
+
+test('a non-Twitch avatar URL is not embedded in the e-mail', function () {
+    $stream = Stream::factory()->create(['profile_image_url' => 'https://evil.example.com/track.gif']);
+    $rule = AlertRule::factory()->create();
+
+    $html = (new StreamAlertMail([['rule' => $rule, 'stream' => $stream]]))->render();
+
+    expect($html)->not->toContain('evil.example.com');
+});
+
+test('a header-injecting subject is neutralised', function () {
+    $stream = Stream::factory()->create(['user_name' => "Bad\r\nBcc: victim@example.com"]);
+    $rule = AlertRule::factory()->create();
+
+    $subject = (new StreamAlertMail([['rule' => $rule, 'stream' => $stream]]))->envelope()->subject;
+
+    expect($subject)->not->toContain("\r")->not->toContain("\n");
+});

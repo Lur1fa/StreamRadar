@@ -1,11 +1,12 @@
 <?php
 
+use App\Mail\StreamAlertMail;
 use App\Models\AlertRule;
 use App\Models\HistoryEvent;
-use App\Models\Setting;
 use App\Models\Stream;
 use App\Models\StreamAlertTracking;
 use App\Services\AlertService;
+use App\Services\Notifications\DeliveryFailed;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 
@@ -222,7 +223,7 @@ test('sendNotifications does nothing when array is empty', function () {
 
 test('sendNotifications sends Discord webhook when configured', function () {
     Http::fake();
-    Setting::set('discord_webhook_url', 'https://discord.com/api/webhooks/test');
+    destination('discord', [], ['webhook_url' => 'https://discord.com/api/webhooks/test']);
     $service = app(AlertService::class);
 
     $rule = AlertRule::factory()->withDiscord()->create();
@@ -233,9 +234,49 @@ test('sendNotifications sends Discord webhook when configured', function () {
     Http::assertSentCount(1);
 });
 
+test('sendNotifications uses the shared fallback format for Discord', function () {
+    Http::fake();
+    destination('discord', [], ['webhook_url' => 'https://discord.com/api/webhooks/test']);
+    $service = app(AlertService::class);
+
+    $rule = AlertRule::factory()->withDiscord()->create(['name' => 'My rule']);
+    $stream = Stream::factory()->create([
+        'user_name' => 'Streamer',
+        'title' => 'Playing now',
+        'game_name' => 'Some Game',
+        'viewer_count' => 42,
+        'tags' => ['English', 'Ranked'],
+    ]);
+
+    $service->sendNotifications([['rule' => $rule, 'stream' => $stream]]);
+
+    Http::assertSent(fn ($request) => $request['embeds'][0]['description'] === "Playing now\nSome Game · 42 viewers\nTags: English, Ranked\nAlert: My rule");
+});
+
+test('sendNotifications renders a custom template for Discord', function () {
+    Http::fake();
+    destination('discord', [], ['webhook_url' => 'https://discord.com/api/webhooks/test']);
+    $service = app(AlertService::class);
+
+    $rule = AlertRule::factory()->withDiscord()->create([
+        'notification_template' => [
+            'version' => 1,
+            'blocks' => [
+                ['type' => 'text', 'value' => 'LIVE: '],
+                ['type' => 'field', 'field' => 'title'],
+            ],
+        ],
+    ]);
+    $stream = Stream::factory()->create(['title' => 'Custom title']);
+
+    $service->sendNotifications([['rule' => $rule, 'stream' => $stream]]);
+
+    Http::assertSent(fn ($request) => $request['embeds'][0]['description'] === 'LIVE: Custom title');
+});
+
 test('sendNotifications sends email when configured', function () {
     Mail::fake();
-    Setting::set('mail_to', 'test@example.com');
+    destination('email', ['to' => 'test@example.com']);
     $service = app(AlertService::class);
 
     $rule = AlertRule::factory()->withEmail()->create();
@@ -248,8 +289,7 @@ test('sendNotifications sends email when configured', function () {
 
 test('sendNotifications sends Telegram when configured', function () {
     Http::fake();
-    Setting::set('telegram_bot_token', 'test-token');
-    Setting::set('telegram_chat_id', '12345');
+    destination('telegram', ['chat_id' => '12345'], ['bot_token' => 'test-token']);
     $service = app(AlertService::class);
 
     $rule = AlertRule::factory()->withTelegram()->create();
@@ -262,7 +302,7 @@ test('sendNotifications sends Telegram when configured', function () {
 
 test('sendNotifications sends webhook when configured', function () {
     Http::fake();
-    Setting::set('webhook_url', 'https://example.com/webhook');
+    destination('webhook', ['method' => 'POST', 'auth' => 'none'], ['url' => 'https://example.com/webhook']);
     $service = app(AlertService::class);
 
     $rule = AlertRule::factory()->withWebhook()->create();
@@ -273,9 +313,61 @@ test('sendNotifications sends webhook when configured', function () {
     Http::assertSentCount(1);
 });
 
+test('sendNotifications sends JSON payload by default', function () {
+    Http::fake();
+    destination('webhook', ['method' => 'POST', 'auth' => 'none'], ['url' => 'https://example.com/webhook']);
+    $service = app(AlertService::class);
+
+    $rule = AlertRule::factory()->withWebhook()->create();
+    $stream = Stream::factory()->create();
+
+    $service->sendNotifications([['rule' => $rule, 'stream' => $stream]]);
+
+    Http::assertSent(fn ($request) => $request['event'] === 'stream.alerts.batch'
+        && $request['count'] === 1);
+});
+
+test('JSON webhook ignores a custom notification template', function () {
+    Http::fake();
+    destination('webhook', ['method' => 'POST', 'auth' => 'none'], ['url' => 'https://example.com/webhook']);
+    $service = app(AlertService::class);
+
+    $rule = AlertRule::factory()->withWebhook()->create([
+        'notification_template' => [
+            'version' => 1,
+            'blocks' => [['type' => 'text', 'value' => 'Do not include this']],
+        ],
+    ]);
+    $stream = Stream::factory()->create();
+
+    $service->sendNotifications([['rule' => $rule, 'stream' => $stream]]);
+
+    Http::assertSent(fn ($request) => $request['event'] === 'stream.alerts.batch'
+        && ! str_contains($request->body(), 'Do not include this'));
+});
+
+test('sendNotifications sends plain text with ntfy headers to an ntfy destination', function () {
+    Http::fake();
+    destination('ntfy', ['server_url' => 'https://ntfy.example.com', 'topic' => 'topic']);
+    $service = app(AlertService::class);
+
+    $rule = AlertRule::factory()->withNtfy()->create();
+    $stream = Stream::factory()->create();
+
+    $service->sendNotifications([['rule' => $rule, 'stream' => $stream]]);
+
+    Http::assertSentCount(1);
+    Http::assertSent(fn ($request) => $request->url() === 'https://ntfy.example.com/topic'
+        && ! $request->hasHeader('Authorization')
+        && $request->hasHeader('Title')
+        && $request->header('Title')[0] === '=?UTF-8?B?'.base64_encode("{$stream->user_name} is live").'?='
+        && str_contains($request->header('Click')[0], 'twitch.tv')
+        && str_contains($request->body(), $stream->title));
+});
+
 test('sendNotifications does not send Discord when no rule has notify_discord', function () {
     Http::fake();
-    Setting::set('discord_webhook_url', 'https://discord.com/api/webhooks/test');
+    destination('discord', [], ['webhook_url' => 'https://discord.com/api/webhooks/test']);
     $service = app(AlertService::class);
 
     $rule = AlertRule::factory()->create(['notify_discord' => false]);
@@ -286,10 +378,9 @@ test('sendNotifications does not send Discord when no rule has notify_discord', 
     Http::assertNothingSent();
 });
 
-test('sendNotifications skips Discord when global notifications_discord_enabled is 0', function () {
+test('sendNotifications skips a disabled Discord destination', function () {
     Http::fake();
-    Setting::set('discord_webhook_url', 'https://discord.com/api/webhooks/test');
-    Setting::set('notifications_discord_enabled', '0');
+    destination('discord', [], ['webhook_url' => 'https://discord.com/api/webhooks/test'], enabled: false);
     $service = app(AlertService::class);
 
     $rule = AlertRule::factory()->withDiscord()->create();
@@ -300,10 +391,9 @@ test('sendNotifications skips Discord when global notifications_discord_enabled 
     Http::assertNothingSent();
 });
 
-test('sendNotifications skips email when global notifications_email_enabled is 0', function () {
+test('sendNotifications skips a disabled email destination', function () {
     Mail::fake();
-    Setting::set('mail_to', 'test@example.com');
-    Setting::set('notifications_email_enabled', '0');
+    destination('email', ['to' => 'test@example.com'], enabled: false);
     $service = app(AlertService::class);
 
     $rule = AlertRule::factory()->withEmail()->create();
@@ -312,4 +402,103 @@ test('sendNotifications skips email when global notifications_email_enabled is 0
     $service->sendNotifications([['rule' => $rule, 'stream' => $stream]]);
 
     Mail::assertNothingSent();
+});
+
+// Destinations
+
+test('an ntfy access token is sent as a Bearer header and the title gets the prefix', function () {
+    Http::fake();
+    destination('ntfy', ['server_url' => 'https://ntfy.example.com/', 'topic' => 'alerts', 'title_prefix' => 'StreamRadar'], ['access_token' => 'tk_secret123']);
+    $rule = AlertRule::factory()->withNtfy()->create();
+    $stream = Stream::factory()->create(['user_name' => 'Streamer']);
+
+    app(AlertService::class)->sendNotifications([['rule' => $rule, 'stream' => $stream]]);
+
+    Http::assertSent(fn ($request) => $request->url() === 'https://ntfy.example.com/alerts'
+        && $request->header('Authorization')[0] === 'Bearer tk_secret123'
+        && $request->header('Title')[0] === '=?UTF-8?B?'.base64_encode('StreamRadar Streamer is live').'?=');
+});
+
+test('an ntfy user name and password are sent as Basic authentication; a token wins over them', function () {
+    Http::fake();
+    $destination = destination('ntfy', ['server_url' => 'https://ntfy.example.com', 'topic' => 'alerts', 'username' => 'phil'], ['password' => 'pa55word']);
+    $rule = AlertRule::factory()->withNtfy()->create();
+    $stream = Stream::factory()->create();
+
+    app(AlertService::class)->sendNotifications([['rule' => $rule, 'stream' => $stream]]);
+    Http::assertSent(fn ($request) => $request->header('Authorization')[0] === 'Basic '.base64_encode('phil:pa55word'));
+
+    $destination->update(['secrets' => ['password' => 'pa55word', 'access_token' => 'tk_wins']]);
+    Http::fake();
+    app(AlertService::class)->sendNotifications([['rule' => $rule, 'stream' => $stream]]);
+    Http::assertSent(fn ($request) => $request->header('Authorization')[0] === 'Bearer tk_wins');
+});
+
+test('a webhook uses its method, headers, query parameters and authentication', function () {
+    Http::fake();
+    destination('webhook', [
+        'method' => 'PUT', 'auth' => 'basic', 'auth_username' => 'hook',
+        'headers' => ['X-Api-Key'], 'query' => ['source'],
+    ], [
+        'url' => 'https://hooks.example.com/in?existing=1', 'auth_password' => 'hookpass',
+        'headers' => ['X-Api-Key' => 'key-123'], 'query' => ['source' => 'stream radar'],
+    ]);
+    $rule = AlertRule::factory()->withWebhook()->create();
+
+    app(AlertService::class)->sendNotifications([['rule' => $rule, 'stream' => Stream::factory()->create()]]);
+
+    Http::assertSent(fn ($request) => $request->method() === 'PUT'
+        && $request->url() === 'https://hooks.example.com/in?existing=1&source=stream%20radar'
+        && $request->header('X-Api-Key')[0] === 'key-123'
+        && $request->header('Authorization')[0] === 'Basic '.base64_encode('hook:hookpass')
+        && $request['event'] === 'stream.alerts.batch');
+});
+
+test('a webhook with a Bearer token sends it as the Authorization header', function () {
+    Http::fake();
+    destination('webhook', ['method' => 'POST', 'auth' => 'bearer'], ['url' => 'https://hooks.example.com/in', 'auth_token' => 'bearer-xyz']);
+    $rule = AlertRule::factory()->withWebhook()->create();
+
+    app(AlertService::class)->sendNotifications([['rule' => $rule, 'stream' => Stream::factory()->create()]]);
+
+    Http::assertSent(fn ($request) => $request->header('Authorization')[0] === 'Bearer bearer-xyz');
+});
+
+test('an e-mail destination sends to all its addresses with its subject prefix', function () {
+    Mail::fake();
+    destination('email', ['to' => 'a@example.com, b@example.com', 'subject_prefix' => '[Live]']);
+    $rule = AlertRule::factory()->withEmail()->create();
+
+    app(AlertService::class)->sendNotifications([['rule' => $rule, 'stream' => Stream::factory()->create(['user_name' => 'Someone'])]]);
+
+    Mail::assertSent(StreamAlertMail::class, fn (StreamAlertMail $mail) => $mail->hasTo('a@example.com') && $mail->hasTo('b@example.com')
+        && str_starts_with($mail->envelope()->subject, '[Live] Someone is live'));
+});
+
+test('every enabled destination of a type receives the alert; other types and incomplete ones do not', function () {
+    Http::fake();
+    destination('discord', [], ['webhook_url' => 'https://discord.com/api/webhooks/1/one'], name: 'One');
+    destination('discord', [], ['webhook_url' => 'https://discord.com/api/webhooks/2/two'], name: 'Two');
+    destination('discord', [], [], name: 'Incomplete');
+    destination('ntfy', ['server_url' => 'https://ntfy.example.com', 'topic' => 'alerts']);
+    $rule = AlertRule::factory()->withDiscord()->create();
+
+    app(AlertService::class)->sendNotifications([['rule' => $rule, 'stream' => Stream::factory()->create()]]);
+
+    Http::assertSentCount(2);
+    Http::assertSent(fn ($request) => str_ends_with($request->url(), '/1/one'));
+    Http::assertSent(fn ($request) => str_ends_with($request->url(), '/2/two'));
+});
+
+test('deliver tries every message and then reports the refusal', function () {
+    Http::fake(['*' => Http::response('forbidden', 403)]);
+    $destination = destination('ntfy', ['server_url' => 'https://ntfy.example.com', 'topic' => 'alerts']);
+    $alerts = [
+        ['rule' => AlertRule::factory()->withNtfy()->create(), 'stream' => Stream::factory()->create()],
+        ['rule' => AlertRule::factory()->withNtfy()->create(), 'stream' => Stream::factory()->create()],
+    ];
+
+    expect(fn () => app(AlertService::class)->deliver($destination, $alerts))
+        ->toThrow(DeliveryFailed::class, 'ntfy answered with HTTP 403 (forbidden).');
+    Http::assertSentCount(2);
 });

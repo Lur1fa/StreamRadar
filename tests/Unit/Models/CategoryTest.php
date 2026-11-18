@@ -1,7 +1,6 @@
 <?php
 
 use App\Models\Category;
-use App\Models\Setting;
 use App\Models\Stream;
 
 test('effectiveFilters returns local filters when use_global_filters is false', function () {
@@ -15,9 +14,9 @@ test('effectiveFilters returns local filters when use_global_filters is false', 
 });
 
 test('effectiveFilters returns global settings when use_global_filters is true', function () {
-    Setting::set('global_min_viewers', '100');
-    Setting::set('global_languages', json_encode(['de']));
-    Setting::set('global_keywords', json_encode(['esports']));
+    setAccountSetting('global_min_viewers', '100');
+    setAccountSetting('global_languages', json_encode(['de']));
+    setAccountSetting('global_keywords', json_encode(['esports']));
 
     $category = Category::factory()->create(['use_global_filters' => true]);
     $filters = $category->effectiveFilters();

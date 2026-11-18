@@ -13,17 +13,39 @@ export interface Category {
     keywords: string[] | null;
     tags: string[] | null;
     streams_count?: number;
+    streams_sum_viewer_count?: number | null;
     created_at: string;
     updated_at: string;
 }
 
-export interface TagFilter {
+/** The filters a category, tag filter or the account default applies. */
+export interface StreamFilterSet {
+    min_viewers?: number | null;
+    min_avg_viewers?: number | null;
+    languages?: string[] | null;
+    keywords?: string[] | null;
+}
+
+export interface TagFilter extends StreamFilterSet {
     id: number;
     tag: string;
-    min_viewers: number | null;
-    min_avg_viewers: number | null;
-    languages: string[] | null;
-    keywords: string[] | null;
+}
+
+/** The account's default filters (Settings → Global Filters). */
+export interface GlobalFilters {
+    min_viewers: number;
+    min_avg_viewers: number;
+    languages: string[];
+    keywords: string[];
+}
+
+export interface TrackedChannel {
+    id: number;
+    twitch_user_id: string;
+    user_login: string;
+    user_name: string;
+    profile_image_url: string | null;
+    is_active: boolean;
 }
 
 export interface Stream {
@@ -46,6 +68,7 @@ export interface Stream {
     tags: string[] | null;
     is_mature: boolean;
     synced_at: string | null;
+    created_at: string | null;
 }
 
 export interface AlertRule {
@@ -65,21 +88,44 @@ export interface AlertRule {
     notify_discord: boolean;
     notify_telegram: boolean;
     notify_webhook: boolean;
+    notify_ntfy: boolean;
     notify_on_category_change: boolean;
     notify_on_stream_start: boolean;
+    notification_template: AlertNotificationTemplate | null;
     is_active: boolean;
+    latest_tracking: { triggered_at: string } | null;
     created_at: string;
 }
 
-export interface IgnoredStreamer {
-    id: number;
-    twitch_user_id: string;
-    user_login: string;
-    user_name: string;
-    profile_image_url: string | null;
-    reason: string | null;
-    created_at: string;
+export type AlertTemplateBlock =
+    | { type: 'field'; field: AlertTemplateField }
+    | { type: 'text'; value: string };
+
+export type AlertTemplateField = 'streamer_name' | 'streamer_login' | 'title' | 'category' | 'viewers' | 'language' | 'url' | 'alert_names' | 'tags' | 'started_at';
+
+export interface AlertNotificationTemplate {
+    version: 1;
+    blocks: AlertTemplateBlock[];
 }
+
+/** The alert rule switch of a destination type: notify_ntfy, notify_email, … */
+export type NotifyKey = `notify_${DestinationType}`;
+
+/** The fields of the alert rule form (create and edit). */
+export type AlertRuleFields = Record<NotifyKey, boolean> & {
+    name: string;
+    streamer_login: string;
+    category_id: number | null;
+    category_ids: number[];
+    category_tags: string[];
+    min_viewers: number | null;
+    min_avg_viewers: number | null;
+    language: string;
+    keywords: string[];
+    notify_on_category_change: boolean;
+    notify_on_stream_start: boolean;
+    notification_template: AlertNotificationTemplate | null;
+};
 
 export interface HistoryEvent {
     id: number;
@@ -93,21 +139,6 @@ export interface HistoryEvent {
     profile_image_url: string | null;
     metadata: Record<string, any> | null;
     created_at: string;
-}
-
-export interface PendingAlert {
-    rule_name: string;
-    streamer: string;
-    streamer_login: string;
-    title: string;
-    viewer_count: number;
-    category: string | null;
-    thumbnail_url: string | null;
-    profile_image_url: string | null;
-    twitch_url: string;
-    notify_browser: boolean;
-    notify_email: boolean;
-    triggered_at: string;
 }
 
 export interface BlacklistRule {
@@ -132,16 +163,32 @@ export interface AppSettings {
     sync_frequency_minutes: number;
 }
 
+export type Role = 'admin' | 'user';
+
+export interface AuthUser {
+    id: number;
+    name: string;
+    email: string;
+    role: Role;
+    is_admin: boolean;
+    has_password: boolean;
+    sso: boolean;
+    disabled: boolean;
+    last_login_at: string | null;
+    created_at: string | null;
+}
+
 export interface Flash {
     success: string | null;
     error: string | null;
 }
 
 export interface PageProps {
+    auth: { user: AuthUser | null };
     stats: Stats;
     appSettings: AppSettings;
     flash: Flash;
-    pendingAlerts: PendingAlert[];
+    errors: Record<string, string>;
 }
 
 export interface PaginatedData<T> {
@@ -153,15 +200,26 @@ export interface PaginatedData<T> {
     links: { url: string | null; label: string; active: boolean }[];
 }
 
-export interface GroupedStreams {
-    category: Category;
-    streams: Stream[];
+export type DestinationType = 'ntfy' | 'webhook' | 'email' | 'telegram' | 'discord';
+
+/** A destination type as the server describes it (DestinationType::forBrowser()). */
+export interface DestinationTypeInfo {
+    value: DestinationType;
+    label: string;
+    /** The alert rule switch for this type, e.g. notify_ntfy. */
+    flag: NotifyKey;
+    defaultConfig: Record<string, any>;
 }
 
-export type StreamFilters = {
-    sort: string;
-    group: string;
-    category: number | null;
-    search: string | null;
-    density: string;
+/** An alert destination as the server sends it: secrets only as "is set" flags and masks. */
+export interface NotificationDestination {
+    id: number;
+    name: string;
+    type: DestinationType;
+    enabled: boolean;
+    config: Record<string, any>;
+    secrets_set: Record<string, boolean>;
+    secret_masks: Record<string, string>;
+    missing: string[];
+    updated_at: string | null;
 }

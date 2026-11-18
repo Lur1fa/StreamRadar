@@ -1,26 +1,19 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed } from 'vue';
 import { router, useForm } from '@inertiajs/vue3';
 import { Search, Pencil, Trash2, X, Package, Loader2, Plus, Check, ArrowUpDown, RefreshCw, LayoutGrid, User } from 'lucide-vue-next';
 import AppLayout from '@/layouts/AppLayout.vue';
 import ConfirmModal from '@/components/ConfirmModal.vue';
-import type { Category, TagFilter } from '@/types';
-import { twitchCategoryUrl } from '@/composables/useTwitch';
-
-interface TrackedChannel {
-    id: number;
-    twitch_user_id: string;
-    user_login: string;
-    user_name: string;
-    profile_image_url: string | null;
-    is_active: boolean;
-}
+import { useChipInput } from '@/composables/useChipInput';
+import { useDebouncedFn } from '@/composables/useDebouncedFn';
+import { distinctTags, requestErrorMessage, sizedImage, twitchCategoryUrl, twitchChannelUrl } from '@/utils';
+import type { Category, GlobalFilters, StreamFilterSet, TagFilter, TrackedChannel } from '@/types';
 
 const props = defineProps<{
     categories: Category[];
     channels: TrackedChannel[];
     sort: string;
-    globalFilters: { min_viewers: number; languages: string[]; keywords: string[] };
+    globalFilters: GlobalFilters;
     tagFilters: TagFilter[];
     tab: string;
 }>();
@@ -34,20 +27,24 @@ const searching = ref(false);
 const searchError = ref('');
 const highlightedIndex = ref(-1);
 
-let searchTimeout: ReturnType<typeof setTimeout>;
+const runSearch = useDebouncedFn(async () => {
+    searching.value = true;
+    try {
+        const { data } = await window.axios.get('/tracking/search', { params: { query: searchQuery.value } });
+        searchResults.value = Array.isArray(data) ? data : [];
+    } catch (e) {
+        searchError.value = requestErrorMessage(e, 'Search failed');
+    } finally {
+        searching.value = false;
+    }
+}, 400);
+
 function onSearch() {
-    clearTimeout(searchTimeout);
+    runSearch.cancel();
     searchError.value = '';
     highlightedIndex.value = -1;
     if (searchQuery.value.length < 2) { searchResults.value = []; return; }
-    searchTimeout = setTimeout(async () => {
-        searching.value = true;
-        try {
-            const { data } = await window.axios.get('/tracking/search', { params: { query: searchQuery.value } });
-            searchResults.value = Array.isArray(data) ? data : [];
-        } catch (e: any) { searchError.value = e.response?.data?.error || e.message || 'Search failed'; }
-        finally { searching.value = false; }
-    }, 400);
+    runSearch();
 }
 
 function onKeydown(e: KeyboardEvent) {
@@ -72,7 +69,7 @@ function trackCategory(cat: any) {
     });
 }
 
-const totalViewers = (cat: any) => cat.streams_sum_viewer_count ?? 0;
+const totalViewers = (cat: Category) => cat.streams_sum_viewer_count ?? 0;
 
 const catSort = ref(localStorage.getItem('sr_tracking_sort') || 'name');
 function changeSort(sort: string) { catSort.value = sort; localStorage.setItem('sr_tracking_sort', sort); }
@@ -88,10 +85,23 @@ const sortedCategories = computed(() => {
 
 const editingId = ref<number | null>(null);
 const editForm = useForm({ is_active: true, notifications_enabled: true, filter_source: 'global', min_viewers: null as number | null, min_avg_viewers: null as number | null, languages: [] as string[], keywords: [] as string[], tags: [] as string[] });
-const tagInput = ref('');
-function addTag() { const v = tagInput.value.trim().toLowerCase(); if (v && !editForm.tags.includes(v)) editForm.tags.push(v); tagInput.value = ''; }
-function removeTag(tag: string) { editForm.tags = editForm.tags.filter(t => t !== tag); }
-function startEdit(cat: Category) { editingId.value = cat.id; editForm.is_active = cat.is_active; editForm.notifications_enabled = cat.notifications_enabled; editForm.filter_source = cat.filter_source || (cat.use_global_filters ? 'global' : 'custom'); editForm.min_viewers = cat.min_viewers; editForm.min_avg_viewers = cat.min_avg_viewers; editForm.languages = cat.languages || []; editForm.keywords = cat.keywords || []; editForm.tags = cat.tags || []; tagInput.value = ''; }
+const { input: tagInput, add: addTag, remove: removeTag } = useChipInput(() => editForm.tags, v => (editForm.tags = v), { lowercase: true });
+const { input: langInput, add: addLang, remove: removeLang } = useChipInput(() => editForm.languages, v => (editForm.languages = v), { lowercase: true });
+const { input: kwInput, add: addKw, remove: removeKw } = useChipInput(() => editForm.keywords, v => (editForm.keywords = v));
+
+function startEdit(cat: Category) {
+    editingId.value = cat.id;
+    editForm.is_active = cat.is_active;
+    editForm.notifications_enabled = cat.notifications_enabled;
+    editForm.filter_source = cat.filter_source || (cat.use_global_filters ? 'global' : 'custom');
+    editForm.min_viewers = cat.min_viewers;
+    editForm.min_avg_viewers = cat.min_avg_viewers;
+    // Copies, so unsaved chips never show up on the category behind the editor.
+    editForm.languages = [...(cat.languages ?? [])];
+    editForm.keywords = [...(cat.keywords ?? [])];
+    editForm.tags = [...(cat.tags ?? [])];
+    tagInput.value = langInput.value = kwInput.value = '';
+}
 function saveEdit(cat: Category) { editForm.put(`/tracking/categories/${cat.id}`, { preserveScroll: true, onSuccess: () => { editingId.value = null; } }); }
 const deletingCategory = ref<Category | null>(null);
 function deleteCategory() { if (!deletingCategory.value) return; router.delete(`/tracking/categories/${deletingCategory.value.id}`, { preserveScroll: true, onSuccess: () => { deletingCategory.value = null; } }); }
@@ -99,85 +109,72 @@ function deleteCategory() { if (!deletingCategory.value) return; router.delete(`
 const syncingCat = ref<number | null>(null);
 function syncCat(cat: Category) { syncingCat.value = cat.id; router.post(`/tracking/categories/${cat.id}/sync`, {}, { preserveScroll: true, onFinish: () => { syncingCat.value = null; } }); }
 
-const langInput = ref(''); const kwInput = ref('');
-function addLang() { const v = langInput.value.trim().toLowerCase(); if (v && !editForm.languages.includes(v)) editForm.languages.push(v); langInput.value = ''; }
-function removeLang(l: string) { editForm.languages = editForm.languages.filter(x => x !== l); }
-function addKw() { const v = kwInput.value.trim(); if (v && !editForm.keywords.includes(v)) editForm.keywords.push(v); kwInput.value = ''; }
-function removeKw(k: string) { editForm.keywords = editForm.keywords.filter(x => x !== k); }
-
-function boxArt(url: string | null, w = 80, h = 107): string { if (!url) return ''; return url.replace('{width}', String(w)).replace('{height}', String(h)); }
+/** "≥100 viewers · ≥50 avg · en, de · speedrun", or `empty` when nothing is set. */
+function describeFilters(f: StreamFilterSet | null | undefined, empty: string): string {
+    const parts: string[] = [];
+    if (f?.min_viewers) parts.push(`≥${f.min_viewers} viewers`);
+    if (f?.min_avg_viewers) parts.push(`≥${f.min_avg_viewers} avg`);
+    if (f?.languages?.length) parts.push(f.languages.join(', '));
+    if (f?.keywords?.length) parts.push(f.keywords.join(', '));
+    return parts.length ? parts.join(' · ') : empty;
+}
 
 function tagFilterTooltip(tag: string): string {
     const tf = props.tagFilters.find(t => t.tag === tag);
-    if (!tf) return 'No filter configured (uses global)';
-    const parts: string[] = [];
-    if (tf.min_viewers) parts.push(`≥${tf.min_viewers} viewers`);
-    if (tf.min_avg_viewers) parts.push(`≥${tf.min_avg_viewers} avg`);
-    if (tf.languages?.length) parts.push(tf.languages.join(', '));
-    if (tf.keywords?.length) parts.push(tf.keywords.join(', '));
-    return parts.length ? parts.join(' · ') : 'No filters (uses global)';
+    return tf ? describeFilters(tf, 'No filters (uses global)') : 'No filter configured (uses global)';
 }
+
+/** The tag filter chosen as the source in the category editor, if it exists. */
+const selectedTagFilter = computed(() => editForm.filter_source.startsWith('tag:')
+    ? props.tagFilters.find(tf => tf.tag === editForm.filter_source.slice(4)) ?? null
+    : null);
+
+const globalFiltersLabel = computed(() => describeFilters(props.globalFilters, 'No filters set'));
 
 function scrollToTagFilters() {
     document.getElementById('tag-filters-section')?.scrollIntoView({ behavior: 'smooth' });
 }
 
+// ---- Tag Filters ----
+const showNewTagForm = ref(false);
+const newTagFilterForm = useForm({ tag: '', min_viewers: null as number | null, min_avg_viewers: null as number | null, languages: [] as string[], keywords: [] as string[] });
+const { input: newTagLangInput, add: addNewTagLang, remove: removeNewTagLang } = useChipInput(() => newTagFilterForm.languages, v => (newTagFilterForm.languages = v), { lowercase: true });
+function submitTagFilter() { newTagFilterForm.post('/tracking/tag-filters', { preserveScroll: true, onSuccess: () => { newTagFilterForm.reset(); showNewTagForm.value = false; } }); }
+function deleteTagFilter(tf: TagFilter) { router.delete(`/tracking/tag-filters/${tf.id}`, { preserveScroll: true }); }
+
 function createAndScrollTagFilter(tag: string) {
     showNewTagForm.value = true;
     newTagFilterForm.tag = tag;
-    setTimeout(() => document.getElementById('tag-filters-section')?.scrollIntoView({ behavior: 'smooth' }), 100);
+    setTimeout(scrollToTagFilters, 100);
 }
-
-// ---- Tag Filters ----
-const newTagFilterForm = useForm({ tag: '', min_viewers: null as number | null, min_avg_viewers: null as number | null, languages: [] as string[], keywords: [] as string[] });
-const newTagLangInput = ref('');
-const newTagKwInput = ref('');
-function addNewTagLang() { const v = newTagLangInput.value.trim().toLowerCase(); if (v && !newTagFilterForm.languages.includes(v)) newTagFilterForm.languages.push(v); newTagLangInput.value = ''; }
-function removeNewTagLang(l: string) { newTagFilterForm.languages = newTagFilterForm.languages.filter(x => x !== l); }
-function addNewTagKw() { const v = newTagKwInput.value.trim(); if (v && !newTagFilterForm.keywords.includes(v)) newTagFilterForm.keywords.push(v); newTagKwInput.value = ''; }
-function removeNewTagKw(k: string) { newTagFilterForm.keywords = newTagFilterForm.keywords.filter(x => x !== k); }
-const showNewTagForm = ref(false);
-function submitTagFilter() { newTagFilterForm.post('/tracking/tag-filters', { preserveScroll: true, onSuccess: () => { newTagFilterForm.reset(); showNewTagForm.value = false; } }); }
-function deleteTagFilter(tf: TagFilter) { router.delete(`/tracking/tag-filters/${tf.id}`, { preserveScroll: true }); }
 
 // Edit tag filter
 const editingTagId = ref<number | null>(null);
 const editTagForm = useForm({ min_viewers: null as number | null, min_avg_viewers: null as number | null, languages: [] as string[], keywords: [] as string[] });
-const editTagLangInput = ref('');
-function addEditTagLang() { const v = editTagLangInput.value.trim().toLowerCase(); if (v && !editTagForm.languages.includes(v)) editTagForm.languages.push(v); editTagLangInput.value = ''; }
-function removeEditTagLang(l: string) { editTagForm.languages = editTagForm.languages.filter(x => x !== l); }
-function startEditTag(tf: TagFilter) { editingTagId.value = tf.id; editTagForm.min_viewers = tf.min_viewers; editTagForm.min_avg_viewers = tf.min_avg_viewers; editTagForm.languages = tf.languages || []; editTagLangInput.value = ''; }
+const { input: editTagLangInput, add: addEditTagLang, remove: removeEditTagLang } = useChipInput(() => editTagForm.languages, v => (editTagForm.languages = v), { lowercase: true });
+function startEditTag(tf: TagFilter) {
+    editingTagId.value = tf.id;
+    editTagForm.min_viewers = tf.min_viewers ?? null;
+    editTagForm.min_avg_viewers = tf.min_avg_viewers ?? null;
+    editTagForm.languages = [...(tf.languages ?? [])];
+    // Not editable here, but sent with the form: keep what is stored.
+    editTagForm.keywords = [...(tf.keywords ?? [])];
+    editTagLangInput.value = '';
+}
 function saveEditTag(tf: TagFilter) { editTagForm.put(`/tracking/tag-filters/${tf.id}`, { preserveScroll: true, onSuccess: () => { editingTagId.value = null; } }); }
 
-// Available tags from categories (for creating tag filters)
-const availableTags = computed(() => {
-    const tags = new Set<string>();
-    props.categories.forEach(c => c.tags?.forEach(t => tags.add(t)));
-    return Array.from(tags).sort();
-});
+// Every tag used by a category, for creating tag filters
+const availableTags = computed(() => distinctTags(props.categories));
 
-// Tags that have filter options in the edit dropdown — all unique tags from categories
-const filterSourceOptions = computed(() => {
-    const options: { value: string; label: string }[] = [{ value: 'global', label: 'Global' }];
-    const allTags = new Set<string>();
-    props.categories.forEach(c => c.tags?.forEach(t => allTags.add(t)));
-    Array.from(allTags).sort().forEach(tag => {
-        const hasFilter = props.tagFilters.some(tf => tf.tag === tag);
-        options.push({ value: `tag:${tag}`, label: `Tag: ${tag}${hasFilter ? '' : ' (no filter)'}` });
-    });
-    options.push({ value: 'custom', label: 'Custom' });
-    return options;
-});
-
-const globalFiltersLabel = computed(() => {
-    const parts: string[] = [];
-    const g = props.globalFilters;
-    if (g.min_viewers) parts.push(`≥${g.min_viewers} viewers`);
-    if (g.min_avg_viewers) parts.push(`≥${g.min_avg_viewers} avg`);
-    if (g.languages.length) parts.push(g.languages.join(', '));
-    if (g.keywords.length) parts.push(g.keywords.join(', '));
-    return parts.length ? parts.join(' · ') : 'No filters set';
-});
+// Filter sources in the edit dropdown: global, a tag filter per category tag, custom
+const filterSourceOptions = computed(() => [
+    { value: 'global', label: 'Global' },
+    ...availableTags.value.map(tag => ({
+        value: `tag:${tag}`,
+        label: `Tag: ${tag}${props.tagFilters.some(tf => tf.tag === tag) ? '' : ' (no filter)'}`,
+    })),
+    { value: 'custom', label: 'Custom' },
+]);
 
 // ---- Channels ----
 const channelInput = ref('');
@@ -201,11 +198,11 @@ function deleteChannel(ch: TrackedChannel) { router.delete(`/tracking/channels/$
     <AppLayout>
         <!-- Tab switcher -->
         <div class="flex items-center gap-2 mb-6">
-            <button @click="activeTab = 'categories'" :class="['flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-colors', activeTab === 'categories' ? 'bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400' : 'text-gray-500 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800']">
+            <button @click="activeTab = 'categories'" :class="['flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-colors', activeTab === 'categories' ? 'accent-soft' : 'text-gray-500 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800']">
                 <LayoutGrid class="w-4 h-4" /> Categories
                 <span v-if="categories.length" class="px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400">{{ categories.length }}</span>
             </button>
-            <button @click="activeTab = 'channels'" :class="['flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-colors', activeTab === 'channels' ? 'bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400' : 'text-gray-500 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800']">
+            <button @click="activeTab = 'channels'" :class="['flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-colors', activeTab === 'channels' ? 'accent-soft' : 'text-gray-500 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800']">
                 <User class="w-4 h-4" /> Channels
                 <span v-if="channels.length" class="px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400">{{ channels.length }}</span>
             </button>
@@ -229,7 +226,7 @@ function deleteChannel(ch: TrackedChannel) { router.delete(`/tracking/channels/$
                             <div v-for="(result, idx) in searchResults" :key="result.id"
                                 :class="['flex items-center gap-3 p-2.5 rounded-lg transition-colors', idx === highlightedIndex ? 'bg-purple-50 dark:bg-purple-500/10' : 'hover:bg-gray-50 dark:hover:bg-zinc-800/60']"
                                 @mouseenter="highlightedIndex = idx">
-                                <img v-if="result.box_art_url" :src="boxArt(result.box_art_url, 40, 54)" :alt="result.name" class="w-8 h-10 rounded object-cover shrink-0" />
+                                <img v-if="result.box_art_url" :src="sizedImage(result.box_art_url, 40, 54)" :alt="result.name" class="w-8 h-10 rounded object-cover shrink-0" />
                                 <div v-else class="w-8 h-10 bg-gray-200 dark:bg-zinc-700 rounded shrink-0"></div>
                                 <span class="flex-1 text-sm font-medium text-gray-900 dark:text-white truncate">{{ result.name }}</span>
                                 <button v-if="!result.is_tracked" @click="trackCategory(result)" :disabled="tracking === result.id"
@@ -285,14 +282,10 @@ function deleteChannel(ch: TrackedChannel) { router.delete(`/tracking/channels/$
                                 <div v-if="editingTagId !== tf.id" class="flex items-start gap-2">
                                     <div class="flex-1 min-w-0 cursor-pointer rounded-lg px-2 py-1.5 -mx-2 -my-1 hover:bg-gray-50 dark:hover:bg-zinc-800 transition-colors" @click="startEditTag(tf)">
                                         <div class="flex items-center gap-1.5">
-                                            <span class="px-1.5 py-0.5 text-[10px] font-medium bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400 rounded">{{ tf.tag }}</span>
+                                            <span class="px-1.5 py-0.5 text-[10px] font-medium accent-soft rounded">{{ tf.tag }}</span>
                                             <Pencil class="w-2.5 h-2.5 text-gray-300 dark:text-zinc-700" />
                                         </div>
-                                        <div class="text-[10px] text-gray-400 dark:text-zinc-600 mt-0.5">
-                                            <span v-if="tf.min_viewers">&ge;{{ tf.min_viewers }}</span>
-                                            <span v-if="tf.languages?.length">{{ tf.min_viewers ? ' · ' : '' }}{{ tf.languages.join(', ') }}</span>
-                                            <span v-if="!tf.min_viewers && !tf.languages?.length">No filters</span>
-                                        </div>
+                                        <div class="text-[10px] text-gray-400 dark:text-zinc-600 mt-0.5">{{ describeFilters(tf, 'No filters') }}</div>
                                     </div>
                                     <button @click="deleteTagFilter(tf)" class="p-1 text-gray-300 dark:text-zinc-700 hover:text-red-500 dark:hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                                         <Trash2 class="w-3 h-3" />
@@ -300,7 +293,7 @@ function deleteChannel(ch: TrackedChannel) { router.delete(`/tracking/channels/$
                                 </div>
                                 <!-- Edit mode -->
                                 <div v-else class="space-y-2 p-2 -mx-2 rounded-lg bg-gray-50 dark:bg-zinc-800/50">
-                                    <span class="px-1.5 py-0.5 text-[10px] font-medium bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400 rounded">{{ tf.tag }}</span>
+                                    <span class="px-1.5 py-0.5 text-[10px] font-medium accent-soft rounded">{{ tf.tag }}</span>
                                     <input type="number" v-model.number="editTagForm.min_viewers" min="0" placeholder="Min viewers" class="w-full px-2.5 py-1.5 text-xs rounded-lg bg-white dark:bg-zinc-800 text-gray-900 dark:text-white outline-none" />
                                     <input type="number" v-model.number="editTagForm.min_avg_viewers" min="0" placeholder="Min avg (TwitchTracker)" class="w-full px-2.5 py-1.5 text-xs rounded-lg bg-white dark:bg-zinc-800 text-gray-900 dark:text-white outline-none" />
                                     <div>
@@ -330,7 +323,7 @@ function deleteChannel(ch: TrackedChannel) { router.delete(`/tracking/channels/$
                         <span class="text-xs text-gray-500 dark:text-zinc-500 mr-1">Sort:</span>
                         <button v-for="s in [{ key: 'name', label: 'Name' }, { key: 'streams', label: 'Streams' }, { key: 'viewers', label: 'Viewers' }]"
                             :key="s.key" @click="changeSort(s.key)"
-                            :class="['px-2.5 py-1 text-xs font-medium rounded-lg transition-colors', catSort === s.key ? 'bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400' : 'text-gray-500 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800']">
+                            :class="['px-2.5 py-1 text-xs font-medium rounded-lg transition-colors', catSort === s.key ? 'accent-soft' : 'text-gray-500 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800']">
                             {{ s.label }}
                         </button>
                     </div>
@@ -342,7 +335,7 @@ function deleteChannel(ch: TrackedChannel) { router.delete(`/tracking/channels/$
                     <TransitionGroup v-else name="list" tag="div" class="space-y-3">
                         <div v-for="cat in sortedCategories" :key="cat.id" class="bg-white dark:bg-zinc-900 rounded-xl shadow-sm dark:shadow-none overflow-hidden">
                             <div class="flex items-center gap-4 p-4">
-                                <img v-if="cat.box_art_url" :src="boxArt(cat.box_art_url)" :alt="cat.name" class="w-14 h-18 rounded-lg object-cover shrink-0" />
+                                <img v-if="cat.box_art_url" :src="sizedImage(cat.box_art_url, 80, 107)" :alt="cat.name" class="w-14 h-18 rounded-lg object-cover shrink-0" />
                                 <div v-else class="w-14 h-18 bg-gray-200 dark:bg-zinc-700 rounded-lg shrink-0"></div>
                                 <div class="flex-1 min-w-0">
                                     <div class="flex items-center gap-2">
@@ -363,7 +356,7 @@ function deleteChannel(ch: TrackedChannel) { router.delete(`/tracking/channels/$
                                                 <span v-if="!cat.min_viewers && !cat.languages?.length && !cat.keywords?.length">No filters</span>
                                         </template>
                                         <template v-if="cat.tags?.length">
-                                            <span v-for="tag in cat.tags" :key="tag" class="px-1.5 py-0.5 bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400 rounded text-[10px]">{{ tag }}</span>
+                                            <span v-for="tag in cat.tags" :key="tag" class="px-1.5 py-0.5 accent-soft rounded text-[10px]">{{ tag }}</span>
                                         </template>
                                         <span v-if="!cat.notifications_enabled" class="text-red-400 dark:text-red-500">Notifications off</span>
                                     </div>
@@ -396,11 +389,8 @@ function deleteChannel(ch: TrackedChannel) { router.delete(`/tracking/channels/$
 
                                 <!-- Row 2: tag filter info (when tag selected) -->
                                 <div v-if="editForm.filter_source.startsWith('tag:')" class="text-xs text-gray-500 dark:text-zinc-500">
-                                    <template v-if="tagFilters.find(tf => tf.tag === editForm.filter_source.substring(4))">
-                                        <span v-if="tagFilters.find(tf => tf.tag === editForm.filter_source.substring(4))!.min_viewers">&ge;{{ tagFilters.find(tf => tf.tag === editForm.filter_source.substring(4))!.min_viewers }} viewers</span>
-                                        <span v-if="tagFilters.find(tf => tf.tag === editForm.filter_source.substring(4))!.languages?.length"> · {{ tagFilters.find(tf => tf.tag === editForm.filter_source.substring(4))!.languages!.join(', ') }}</span>
-                                        <span v-if="tagFilters.find(tf => tf.tag === editForm.filter_source.substring(4))!.keywords?.length"> · {{ tagFilters.find(tf => tf.tag === editForm.filter_source.substring(4))!.keywords!.join(', ') }}</span>
-                                        <span v-if="!tagFilters.find(tf => tf.tag === editForm.filter_source.substring(4))!.min_viewers && !tagFilters.find(tf => tf.tag === editForm.filter_source.substring(4))!.languages?.length && !tagFilters.find(tf => tf.tag === editForm.filter_source.substring(4))!.keywords?.length">No filters (inherits global)</span>
+                                    <template v-if="selectedTagFilter">
+                                        <span>{{ describeFilters(selectedTagFilter, 'No filters (inherits global)') }}</span>
                                         <span class="ml-1">·</span>
                                         <button @click="scrollToTagFilters" class="text-purple-500 dark:text-purple-400 hover:underline ml-0.5">edit tag filter</button>
                                     </template>
@@ -486,7 +476,7 @@ function deleteChannel(ch: TrackedChannel) { router.delete(`/tracking/channels/$
                     <img v-if="ch.profile_image_url" :src="ch.profile_image_url" :alt="ch.user_name" class="w-9 h-9 rounded-full shrink-0" />
                     <div v-else class="w-9 h-9 rounded-full bg-gray-200 dark:bg-zinc-700 shrink-0"></div>
                     <div class="flex-1 min-w-0">
-                        <a :href="`https://www.twitch.tv/${ch.user_login}`" target="_blank" class="text-sm font-medium text-gray-900 dark:text-white hover:text-purple-600 dark:hover:text-purple-400 transition-colors">{{ ch.user_name }}</a>
+                        <a :href="twitchChannelUrl(ch.user_login)" target="_blank" class="text-sm font-medium text-gray-900 dark:text-white hover:text-purple-600 dark:hover:text-purple-400 transition-colors">{{ ch.user_name }}</a>
                         <p class="text-xs text-gray-500 dark:text-zinc-500">@{{ ch.user_login }}</p>
                     </div>
                     <button @click="deleteChannel(ch)" class="shrink-0 p-1.5 text-gray-400 hover:text-red-500 dark:hover:text-red-400 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors">

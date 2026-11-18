@@ -1,5 +1,6 @@
 <?php
 
-test('the application returns a successful response', function () {
-    $this->get('/')->assertStatus(200);
+test('the application requires authentication', function () {
+    // The app is never open: an unauthenticated request is redirected to login.
+    $this->get('/')->assertRedirect('/login');
 });

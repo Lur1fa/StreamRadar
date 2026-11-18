@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { router } from '@inertiajs/vue3';
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { Search, List, LayoutGrid as GridIcon, Video, ChevronDown, ChevronsDownUp, ChevronsUpDown, SlidersHorizontal, X } from 'lucide-vue-next';
 import AppLayout from '@/layouts/AppLayout.vue';
 import StreamCard from '@/components/StreamCard.vue';
 import LanguageFlag from '@/components/LanguageFlag.vue';
 import { useNow } from '@/composables/useNow';
-import { twitchCategoryUrl } from '@/composables/useTwitch';
-import type { Stream, Category } from '@/types';
+import { useDebouncedFn } from '@/composables/useDebouncedFn';
+import { readStored, sizedImage, twitchCategoryUrl, writeStored } from '@/utils';
+import type { Stream } from '@/types';
 
 interface StreamGroup {
     name: string;
@@ -31,28 +32,20 @@ const searchInput = ref(props.filters.search || '');
 const visibleCount = ref(BATCH);
 const showFilters = ref(false);
 
-// Pinned streams (localStorage)
-const pinnedLogins = ref<string[]>([]);
-onMounted(() => {
-    try { pinnedLogins.value = JSON.parse(localStorage.getItem('sp_pinned') || '[]'); } catch {}
-});
+// Pinned streams and collapsed groups are remembered in this browser.
+const pinnedLogins = ref<string[]>(readStored('sp_pinned', []));
+const collapsed = ref<Record<string, boolean>>(readStored('sp_collapsed', {}));
+watch(pinnedLogins, (value) => writeStored('sp_pinned', value), { deep: true });
+watch(collapsed, (value) => writeStored('sp_collapsed', value), { deep: true });
 
 function togglePin(login: string) {
     const idx = pinnedLogins.value.indexOf(login);
     if (idx >= 0) pinnedLogins.value.splice(idx, 1);
     else pinnedLogins.value.push(login);
-    localStorage.setItem('sp_pinned', JSON.stringify(pinnedLogins.value));
 }
-
-// Accordion state
-const collapsed = ref<Record<string, boolean>>({});
-onMounted(() => {
-    try { collapsed.value = JSON.parse(localStorage.getItem('sp_collapsed') || '{}'); } catch {}
-});
 
 function toggleGroup(key: string) {
     collapsed.value[key] = !collapsed.value[key];
-    localStorage.setItem('sp_collapsed', JSON.stringify(collapsed.value));
 }
 
 
@@ -71,7 +64,6 @@ const allCollapsed = computed(() => groupedStreams.value.every(g => collapsed.va
 function toggleAll() {
     const s = !allCollapsed.value;
     for (const g of groupedStreams.value) collapsed.value[g.name] = s;
-    localStorage.setItem('sp_collapsed', JSON.stringify(collapsed.value));
 }
 
 function isNewStream(stream: Stream): boolean {
@@ -97,12 +89,21 @@ function toggleGroupMode() {
     localStorage.setItem('sp_group', groupMode.value);
 }
 
-let searchTimeout: ReturnType<typeof setTimeout>;
+const search = useDebouncedFn((value: string) => applyFilter('search', value || null), 300);
 function onSearch(e: Event) {
-    const value = (e.target as HTMLInputElement).value;
-    searchInput.value = value;
-    clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(() => applyFilter('search', value || null), 300);
+    searchInput.value = (e.target as HTMLInputElement).value;
+    search(searchInput.value);
+}
+
+/** The same bindings for every card, in every view. */
+function cardProps(stream: Stream) {
+    return {
+        stream,
+        now: now.value,
+        isNew: isNewStream(stream),
+        isTrackedChannel: props.trackedLogins.includes(stream.user_login),
+        isPinned: pinnedLogins.value.includes(stream.user_login),
+    };
 }
 
 // Sort streams with pinned on top
@@ -194,11 +195,11 @@ const sortOptions = [
                     <span class="text-xs text-gray-500 dark:text-zinc-500">Language:</span>
                     <div class="flex gap-1 flex-wrap">
                         <button @click="applyFilter('lang', null)"
-                            :class="['px-2 py-1 text-xs rounded-md transition-colors', !filters.lang ? 'bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400' : 'text-gray-500 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800']">
+                            :class="['px-2 py-1 text-xs rounded-md transition-colors', !filters.lang ? 'accent-soft' : 'text-gray-500 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800']">
                             All
                         </button>
                         <button v-for="lang in languages" :key="lang" @click="applyFilter('lang', filters.lang === lang ? null : lang)"
-                            :class="['px-2 py-1 text-xs rounded-md transition-colors flex items-center gap-1', filters.lang === lang ? 'bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400' : 'text-gray-500 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800']">
+                            :class="['px-2 py-1 text-xs rounded-md transition-colors flex items-center gap-1', filters.lang === lang ? 'accent-soft' : 'text-gray-500 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800']">
                             <LanguageFlag :code="lang" :size="12" />
                             {{ lang }}
                         </button>
@@ -243,7 +244,7 @@ const sortOptions = [
         <template v-else-if="isGrouped && groupedStreams.length">
             <div v-for="group in groupedStreams" :key="group.name" class="mb-4">
                 <div class="w-full flex items-center gap-3 p-3 rounded-xl bg-white dark:bg-zinc-900 shadow-sm dark:shadow-none mb-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-zinc-800/60 transition-colors" @click="toggleGroup(group.name)">
-                    <img v-if="group.boxArtUrl" :src="group.boxArtUrl.replace('{width}', '40').replace('{height}', '54')" :alt="group.name" class="w-8 h-10 rounded object-cover" />
+                    <img v-if="group.boxArtUrl" :src="sizedImage(group.boxArtUrl, 40, 54)" :alt="group.name" class="w-8 h-10 rounded object-cover" />
                     <a :href="twitchCategoryUrl(group.name)" target="_blank" @click.stop class="text-base font-bold text-gray-900 dark:text-white hover:text-purple-600 dark:hover:text-purple-400 transition-colors truncate">{{ group.name }}</a>
                     <span v-if="!group.tracked" class="px-1.5 py-0.5 text-[10px] font-medium bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400 rounded shrink-0">Not tracked</span>
                     <span class="flex-1"></span>
@@ -254,10 +255,10 @@ const sortOptions = [
                 </div>
                 <div v-show="!collapsed[group.name]">
                     <div v-if="density === 'compact'" class="rounded-xl overflow-hidden bg-white dark:bg-zinc-900 shadow-sm dark:shadow-none divide-y divide-gray-100/60 dark:divide-zinc-800/60">
-                        <StreamCard v-for="stream in groupVisible(group)" :key="stream.id" :stream="stream" :is-new="isNewStream(stream)" :is-tracked-channel="trackedLogins.includes(stream.user_login)" :is-pinned="pinnedLogins.includes(stream.user_login)" @toggle-pin="togglePin" :now="now" compact />
+                        <StreamCard v-for="stream in groupVisible(group)" :key="stream.id" v-bind="cardProps(stream)" @toggle-pin="togglePin" compact />
                     </div>
                     <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                        <StreamCard v-for="stream in groupVisible(group)" :key="stream.id" :stream="stream" :is-new="isNewStream(stream)" :is-tracked-channel="trackedLogins.includes(stream.user_login)" :is-pinned="pinnedLogins.includes(stream.user_login)" @toggle-pin="togglePin" :now="now" />
+                        <StreamCard v-for="stream in groupVisible(group)" :key="stream.id" v-bind="cardProps(stream)" @toggle-pin="togglePin" />
                     </div>
                     <div v-if="groupHasMore(group)" class="flex justify-center mt-3">
                         <button @click="showMoreGroup(group.name)" class="px-5 py-1.5 text-xs font-medium text-gray-500 dark:text-zinc-400 bg-white dark:bg-zinc-900 rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-800 shadow-sm dark:shadow-none transition-colors">
@@ -271,10 +272,10 @@ const sortOptions = [
         <!-- Flat View -->
         <template v-else>
             <div v-if="density === 'compact'" class="rounded-xl overflow-hidden bg-white dark:bg-zinc-900 shadow-sm dark:shadow-none divide-y divide-gray-100/60 dark:divide-zinc-800/60">
-                <StreamCard v-for="stream in visibleStreams" :key="stream.id" :stream="stream" :is-new="isNewStream(stream)" :is-tracked-channel="trackedLogins.includes(stream.user_login)" :is-pinned="pinnedLogins.includes(stream.user_login)" @toggle-pin="togglePin" :now="now" compact />
+                <StreamCard v-for="stream in visibleStreams" :key="stream.id" v-bind="cardProps(stream)" @toggle-pin="togglePin" compact />
             </div>
             <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                <StreamCard v-for="stream in visibleStreams" :key="stream.id" :stream="stream" :is-new="isNewStream(stream)" :is-tracked-channel="trackedLogins.includes(stream.user_login)" :is-pinned="pinnedLogins.includes(stream.user_login)" @toggle-pin="togglePin" :now="now" />
+                <StreamCard v-for="stream in visibleStreams" :key="stream.id" v-bind="cardProps(stream)" @toggle-pin="togglePin" />
             </div>
             <div v-if="hasMore" class="flex justify-center mt-6">
                 <button @click="showMore" class="px-6 py-2 text-sm font-medium text-gray-600 dark:text-zinc-400 bg-white dark:bg-zinc-900 rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-800 shadow-sm dark:shadow-none transition-colors">

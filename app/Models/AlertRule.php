@@ -2,14 +2,19 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToOwner;
+use App\Services\Notifications\DestinationType;
+use App\Support\Text;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class AlertRule extends Model
 {
-    use HasFactory;
+    use BelongsToOwner, HasFactory;
+
     protected $fillable = [
         'name',
         'streamer_login',
@@ -25,10 +30,27 @@ class AlertRule extends Model
         'notify_discord',
         'notify_telegram',
         'notify_webhook',
+        'notify_ntfy',
         'notify_on_category_change',
         'notify_on_stream_start',
+        'notification_template',
         'is_active',
     ];
+
+    /**
+     * Columns in a configuration backup. Categories are exported by Twitch
+     * id instead (see SettingsController::export).
+     *
+     * @return string[]
+     */
+    public static function exportColumns(): array
+    {
+        return [
+            'name', 'streamer_login', 'category_tags', 'match_mode', 'min_viewers', 'min_avg_viewers', 'language', 'keywords',
+            ...DestinationType::ruleFlags(),
+            'notify_on_category_change', 'notify_on_stream_start', 'notification_template', 'is_active',
+        ];
+    }
 
     protected function casts(): array
     {
@@ -38,13 +60,11 @@ class AlertRule extends Model
             'keywords' => 'array',
             'category_ids' => 'array',
             'category_tags' => 'array',
-            'notify_email' => 'boolean',
-            'notify_discord' => 'boolean',
-            'notify_telegram' => 'boolean',
-            'notify_webhook' => 'boolean',
+            ...array_fill_keys(DestinationType::ruleFlags(), 'boolean'),
             'notify_on_category_change' => 'boolean',
             'notify_on_stream_start' => 'boolean',
             'is_active' => 'boolean',
+            'notification_template' => 'array',
         ];
     }
 
@@ -58,7 +78,7 @@ class AlertRule extends Model
         return $this->hasMany(StreamAlertTracking::class);
     }
 
-    public function latestTracking(): \Illuminate\Database\Eloquent\Relations\HasOne
+    public function latestTracking(): HasOne
     {
         return $this->hasOne(StreamAlertTracking::class)->whereNotNull('triggered_at')->latestOfMany('triggered_at');
     }
@@ -108,18 +128,8 @@ class AlertRule extends Model
             return false;
         }
 
-        if (! empty($this->keywords)) {
-            $titleLower = strtolower($stream->title);
-            $matched = false;
-            foreach ($this->keywords as $keyword) {
-                if (str_contains($titleLower, strtolower($keyword))) {
-                    $matched = true;
-                    break;
-                }
-            }
-            if (! $matched) {
-                return false;
-            }
+        if (! empty($this->keywords) && ! Text::containsAny((string) $stream->title, $this->keywords)) {
+            return false;
         }
 
         return true;

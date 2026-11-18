@@ -3,7 +3,9 @@
 namespace App\Services;
 
 use App\Models\Setting;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -28,6 +30,12 @@ class TwitchApiService
 
     private const REQUEST_TIMEOUT_SECONDS = 15;
 
+    /** Shown wherever a Twitch action needs credentials that are missing. */
+    public const NOT_CONFIGURED = 'Twitch API credentials not configured.';
+
+    /** Twitch accepts at most this many ids or logins per request. */
+    private const BATCH_SIZE = 100;
+
     public function getClientId(): ?string
     {
         return Setting::get('twitch_client_id', config('services.twitch.client_id'));
@@ -43,18 +51,21 @@ class TwitchApiService
         return ! empty($this->getClientId()) && ! empty($this->getClientSecret());
     }
 
+    /**
+     * @return array{success: bool, message: string, reason?: string} `reason` is 'not_configured' or 'failed' on failure
+     */
     public function testConnection(): array
     {
         if (! $this->isConfigured()) {
-            return ['success' => false, 'message' => 'Twitch API credentials not configured'];
+            return ['success' => false, 'reason' => 'not_configured', 'message' => self::NOT_CONFIGURED];
         }
 
         try {
-            $token = $this->fetchAccessToken();
+            $this->fetchAccessToken();
 
             return ['success' => true, 'message' => 'Connection successful'];
         } catch (\Exception $e) {
-            return ['success' => false, 'message' => $e->getMessage()];
+            return ['success' => false, 'reason' => 'failed', 'message' => $e->getMessage()];
         }
     }
 
@@ -104,24 +115,24 @@ class TwitchApiService
         }
 
         try {
-            $response = $this->client()->{$method}($url, $query);
-            $this->recordSuccess();
-
-            return $response->json();
-        } catch (\Illuminate\Http\Client\RequestException $e) {
-            if ($e->response?->status() === 401) {
+            try {
+                $response = $this->client()->{$method}($url, $query);
+            } catch (RequestException $e) {
+                if ($e->response?->status() !== 401) {
+                    throw $e;
+                }
+                // The cached token expired early: get a new one and try once more.
                 Cache::forget(self::TOKEN_CACHE_KEY);
                 $response = $this->client()->{$method}($url, $query);
-                $this->recordSuccess();
-
-                return $response->json();
             }
-            $this->recordFailure();
-            throw $e;
-        } catch (\Illuminate\Http\Client\ConnectionException $e) {
+        } catch (RequestException|ConnectionException $e) {
             $this->recordFailure();
             throw $e;
         }
+
+        $this->recordSuccess();
+
+        return $response->json();
     }
 
     private function recordSuccess(): void
@@ -208,65 +219,37 @@ class TwitchApiService
     }
 
     /**
-     * Get live streams for specific user logins.
+     * Live streams of the given channel logins.
      */
     public function getStreamsByUsers(array $logins): array
     {
-        if (empty($logins)) {
-            return [];
-        }
-
-        $allStreams = [];
-        $chunks = array_chunk($logins, 100);
-
-        foreach ($chunks as $chunk) {
-            $response = $this->request('get', '/streams', [
-                'user_login' => $chunk,
-                'first' => 100,
-            ]);
-            $allStreams = array_merge($allStreams, $response['data'] ?? []);
-        }
-
-        return $allStreams;
+        return $this->batched('/streams', 'user_login', $logins, ['first' => self::BATCH_SIZE]);
     }
 
     public function getUsers(array $logins): array
     {
-        if (empty($logins)) {
-            return [];
-        }
-
-        $chunks = array_chunk($logins, 100);
-        $allUsers = [];
-
-        foreach ($chunks as $chunk) {
-            $response = $this->request('get', '/users', [
-                'login' => $chunk,
-            ]);
-
-            $allUsers = array_merge($allUsers, $response['data'] ?? []);
-        }
-
-        return $allUsers;
+        return $this->batched('/users', 'login', $logins);
     }
 
     public function getUsersByIds(array $ids): array
     {
-        if (empty($ids)) {
-            return [];
+        return $this->batched('/users', 'id', $ids);
+    }
+
+    /**
+     * GET $path with $values sent as the repeated $param, BATCH_SIZE per request.
+     *
+     * @param  array<int, string>  $values
+     * @param  array<string, mixed>  $query
+     * @return array<int, array<string, mixed>> the `data` of every response
+     */
+    private function batched(string $path, string $param, array $values, array $query = []): array
+    {
+        $all = [];
+        foreach (array_chunk($values, self::BATCH_SIZE) as $chunk) {
+            $all = array_merge($all, $this->request('get', $path, [$param => $chunk, ...$query])['data'] ?? []);
         }
 
-        $chunks = array_chunk($ids, 100);
-        $allUsers = [];
-
-        foreach ($chunks as $chunk) {
-            $response = $this->request('get', '/users', [
-                'id' => $chunk,
-            ]);
-
-            $allUsers = array_merge($allUsers, $response['data'] ?? []);
-        }
-
-        return $allUsers;
+        return $all;
     }
 }

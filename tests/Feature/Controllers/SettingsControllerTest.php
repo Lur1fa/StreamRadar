@@ -1,13 +1,13 @@
 <?php
 
+use App\Models\AlertRule;
 use App\Models\BlacklistRule;
 use App\Models\Category;
 use App\Models\Setting;
 use App\Models\TrackedChannel;
 use App\Services\TwitchApiService;
 use Illuminate\Http\UploadedFile;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\DB;
 
 test('GET /settings returns 200 with settings', function () {
     $this->get('/settings')
@@ -18,70 +18,82 @@ test('GET /settings returns 200 with settings', function () {
         );
 });
 
-test('GET /settings masks twitch_client_secret', function () {
+test('GET /settings exposes only a mask and a flag for secrets', function () {
     Setting::set('twitch_client_secret', 'my_super_secret_key_123');
 
     $this->get('/settings')
         ->assertInertia(fn ($page) => $page
-            ->where('settings.twitch_client_secret_masked', fn ($val) => str_starts_with($val, '***'))
+            ->where('settings.twitch_client_secret_set', true)
+            ->where('settings.twitch_client_secret_masked', fn ($val) => str_ends_with($val, '_123') && ! str_contains($val, 'super'))
+            ->missing('settings.twitch_client_secret')
         );
 });
 
 test('PUT /settings saves settings', function () {
     $this->put('/settings', ['theme' => 'dark'])->assertRedirect();
 
-    expect(Setting::get('theme'))->toBe('dark');
+    expect(getAccountSetting('theme'))->toBe('dark');
 });
 
-test('PUT /settings does not overwrite secret with masked value', function () {
+test('PUT /settings normalises booleans and validates numbers', function () {
+    $this->put('/settings', ['auto_sync_enabled' => false, 'sync_frequency_minutes' => 15])->assertRedirect()->assertSessionHasNoErrors();
+
+    expect(Setting::get('auto_sync_enabled'))->toBe('0')
+        ->and(Setting::get('sync_frequency_minutes'))->toBe('15');
+
+    $this->from('/settings')->put('/settings', ['sync_frequency_minutes' => 0])->assertSessionHasErrors('sync_frequency_minutes');
+    $this->from('/settings')->put('/settings', ['theme' => 'neon'])->assertSessionHasErrors('theme');
+    $this->from('/settings')->put('/settings', ['smtp_port' => 'abc'])->assertSessionHasErrors('smtp_port');
+});
+
+test('PUT /settings does not overwrite a secret with its mask or an empty value', function () {
     Setting::set('twitch_client_secret', 'real_secret');
 
-    $this->put('/settings', ['twitch_client_secret' => '********cret']);
-
+    $this->put('/settings', ['twitch_client_secret' => '••••••••cret']);
     expect(Setting::get('twitch_client_secret'))->toBe('real_secret');
+
+    $this->put('/settings', ['twitch_client_secret' => '']);
+    expect(Setting::get('twitch_client_secret'))->toBe('real_secret');
+
+    $this->put('/settings', ['twitch_client_secret' => 'new_secret_value']);
+    expect(Setting::get('twitch_client_secret'))->toBe('new_secret_value');
 });
 
-test('PUT /settings hashes auth_password', function () {
-    $this->put('/settings', [
-        'auth_username' => 'admin',
-        'auth_password' => 'mypassword',
-    ])->assertRedirect();
+test('PUT /settings can explicitly clear a secret', function () {
+    Setting::set('smtp_password', 'hunter2hunter2');
 
-    $hashed = Setting::get('auth_password');
-    expect(password_verify('mypassword', $hashed))->toBeTrue();
+    $this->put('/settings', ['clear_secrets' => ['smtp_password']])->assertRedirect();
+
+    expect(Setting::get('smtp_password'))->toBeNull();
 });
 
-test('POST /settings/disable-auth removes credentials with valid password', function () {
-    Setting::set('auth_username', 'admin');
-    Setting::set('auth_password', bcrypt('secret'));
+test('PUT /settings ignores the alert destination keys of the old settings', function () {
+    $this->put('/settings', ['mail_to' => 'old@example.com', 'webhook_url' => 'https://hooks.example.com/x'])->assertRedirect()->assertSessionHasNoErrors();
 
-    $this->withSession(['authenticated' => true])
-        ->postJson('/settings/disable-auth', ['password' => 'secret'])
-        ->assertOk();
-
-    expect(Setting::get('auth_username'))->toBeNull()
-        ->and(Setting::get('auth_password'))->toBeNull();
+    expect(getAccountSetting('mail_to'))->toBeNull()
+        ->and(getAccountSetting('webhook_url'))->toBeNull();
 });
 
-test('POST /settings/disable-auth rejects invalid password', function () {
-    Setting::set('auth_username', 'admin');
-    Setting::set('auth_password', bcrypt('secret'));
+test('secrets are stored encrypted at rest', function () {
+    Setting::set('smtp_password', 'hunter2hunter2');
 
-    $this->withSession(['authenticated' => true])
-        ->postJson('/settings/disable-auth', ['password' => 'wrong'])
-        ->assertStatus(422);
+    $raw = DB::table('settings')->where('key', 'smtp_password')->value('value');
+
+    expect($raw)->not->toContain('hunter2')
+        ->and(Setting::get('smtp_password'))->toBe('hunter2hunter2');
 });
 
 test('GET /settings/export returns JSON with data', function () {
     Category::factory()->create();
     TrackedChannel::factory()->create();
     BlacklistRule::factory()->create();
-    Setting::set('theme', 'dark');
+    setAccountSetting('theme', 'dark');
 
     $response = $this->get('/settings/export')->assertOk();
     $data = $response->json();
 
-    expect($data)->toHaveKeys(['settings', 'categories', 'channels', 'blacklist']);
+    expect($data)->toHaveKeys(['settings', 'categories', 'channels', 'blacklist', 'tag_filters', 'alerts', 'destinations'])
+        ->and($data['settings']['theme'])->toBe('dark');
 });
 
 test('POST /settings/import imports from JSON file', function () {
@@ -94,45 +106,45 @@ test('POST /settings/import imports from JSON file', function () {
 
     $file = UploadedFile::fake()->createWithContent('backup.json', json_encode($exportData));
 
-    $this->post('/settings/import', ['file' => $file])->assertRedirect();
+    $this->post('/settings/import', ['file' => $file])->assertRedirect()->assertSessionHas('success');
 
-    expect(Setting::get('theme'))->toBe('light');
+    expect(getAccountSetting('theme'))->toBe('light');
     $this->assertDatabaseHas('categories', ['twitch_id' => '123']);
+});
+
+test('POST /settings/import round-trips an export including alert templates', function () {
+    $category = Category::factory()->create(['twitch_id' => '777']);
+    AlertRule::factory()->create([
+        'name' => 'Round trip',
+        'category_id' => $category->id,
+        'notification_template' => ['version' => 1, 'blocks' => [['type' => 'field', 'field' => 'title']]],
+    ]);
+
+    $export = $this->get('/settings/export')->json();
+    AlertRule::query()->delete();
+
+    $file = UploadedFile::fake()->createWithContent('backup.json', json_encode($export));
+    $this->post('/settings/import', ['file' => $file])->assertSessionHas('success');
+
+    $rule = AlertRule::where('name', 'Round trip')->firstOrFail();
+    expect($rule->category_id)->toBe($category->id)
+        ->and($rule->notification_template['blocks'][0]['field'])->toBe('title');
 });
 
 test('POST /settings/import rejects invalid JSON', function () {
     $file = UploadedFile::fake()->createWithContent('bad.json', 'not json');
 
-    $this->post('/settings/import', ['file' => $file])->assertRedirect();
+    $this->post('/settings/import', ['file' => $file])->assertRedirect()->assertSessionHas('error');
 });
 
 test('POST /settings/test-twitch calls testConnection', function () {
     $this->mock(TwitchApiService::class, function ($mock) {
-        $mock->shouldReceive('testConnection')->once()->andReturn(['success' => true]);
+        $mock->shouldReceive('testConnection')->once()->andReturn(['success' => true, 'message' => 'Connection successful']);
     });
 
-    $this->postJson('/settings/test-twitch')->assertOk();
+    $this->postJson('/settings/test-twitch')->assertOk()->assertJson(['success' => true]);
 });
 
-test('POST /settings/test-discord sends webhook', function () {
-    Http::fake(['discord.com/*' => Http::response(null, 204)]);
-    Setting::set('discord_webhook_url', 'https://discord.com/api/webhooks/test');
-
-    $this->mock(TwitchApiService::class, function ($mock) {
-        $mock->shouldReceive('isConfigured')->andReturn(false);
-    });
-
-    $this->postJson('/settings/test-discord')->assertOk();
-});
-
-test('POST /settings/test-email sends test email', function () {
-    Mail::fake();
-    Setting::set('mail_to', 'test@example.com');
-
-    $this->mock(TwitchApiService::class, function ($mock) {
-        $mock->shouldReceive('isConfigured')->andReturn(false);
-    });
-
-    $this->postJson('/settings/test-email')->assertOk();
-    Mail::assertSentCount(1);
+test('GET /settings/check-update does not require a shell', function () {
+    $this->getJson('/settings/check-update')->assertOk()->assertJsonStructure(['update_available']);
 });

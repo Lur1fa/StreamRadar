@@ -239,6 +239,7 @@ test('sync removes streams after grace period expires', function () {
 test('sync creates sync_completed HistoryEvent', function () {
     $twitch = $this->mock(TwitchApiService::class);
     $this->mock(TwitchTrackerService::class);
+    Category::factory()->create(); // the event is recorded for every account that tracks something
 
     $twitch->shouldReceive('getAllStreamsForCategory')->andReturn([]);
     $twitch->shouldReceive('getStreamsByUsers')->andReturn([]);
@@ -286,7 +287,7 @@ test('syncTrackedChannels returns empty result when no active channels', functio
     $this->mock(TwitchTrackerService::class);
     $sync = app(SyncService::class);
 
-    $result = $sync->syncTrackedChannels();
+    $result = $sync->syncTrackedChannels(testOwner());
 
     expect($result['new'])->toBe(0);
 });
@@ -303,7 +304,7 @@ test('syncTrackedChannels creates streams for tracked channels', function () {
     $twitch->shouldReceive('getUsersByIds')->andReturn([]);
 
     $sync = app(SyncService::class);
-    $result = $sync->syncTrackedChannels();
+    $result = $sync->syncTrackedChannels(testOwner());
 
     expect($result['new'])->toBe(1)
         ->and(Stream::count())->toBe(1);

@@ -4,15 +4,19 @@ namespace Database\Factories;
 
 use App\Models\Category;
 use App\Models\Stream;
+use Database\Factories\Concerns\HasOwner;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 class StreamFactory extends Factory
 {
+    use HasOwner;
+
     protected $model = Stream::class;
 
     public function definition(): array
     {
         return [
+            'owner_id' => $this->defaultOwner(),
             'twitch_id' => (string) fake()->unique()->numberBetween(100000, 9999999),
             'user_id' => (string) fake()->numberBetween(10000, 999999),
             'user_login' => fake()->unique()->userName(),

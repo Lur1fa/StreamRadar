@@ -23,7 +23,7 @@ class BlacklistRuleFactory extends Factory
         ];
     }
 
-    public function channel(string $login = null): static
+    public function channel(?string $login = null): static
     {
         return $this->state(fn () => [
             'type' => 'channel',
@@ -31,7 +31,7 @@ class BlacklistRuleFactory extends Factory
         ]);
     }
 
-    public function keyword(string $keyword = null): static
+    public function keyword(?string $keyword = null): static
     {
         return $this->state(fn () => [
             'type' => 'keyword',
@@ -39,7 +39,7 @@ class BlacklistRuleFactory extends Factory
         ]);
     }
 
-    public function tag(string $tag = null): static
+    public function tag(?string $tag = null): static
     {
         return $this->state(fn () => [
             'type' => 'tag',

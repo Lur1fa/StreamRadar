@@ -5,7 +5,7 @@ name: docker-publish
 on:
   push:
     branches: [main]
-    tags: ['v*.*.*', '*.*.*']
+    tags: ["v*.*.*", "*.*.*"]
   workflow_dispatch:
 
 permissions:
@@ -35,7 +35,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE }}
- 
+
           tags: |
             type=semver,pattern={{version}}
             type=ref,event=branch
@@ -50,7 +50,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # The signed attestation below replaces BuildKit's unsigned one.
           provenance: false
 
       # Signed build provenance. Verify an image with:

@@ -63,6 +63,7 @@ class SyncService
     public function sync(): SyncResult
     {
         $start = microtime(true);
+        $startedAt = now();
         $runs = [];
 
         $this->sharing = true;
@@ -94,7 +95,7 @@ class SyncService
         try {
             return $this->finish($runs, $start);
         } finally {
-            Setting::set('last_sync_at', now()->toIso8601String());
+            Setting::set('last_sync_at', $startedAt->toIso8601String());
         }
     }
 

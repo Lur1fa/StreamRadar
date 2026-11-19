@@ -35,8 +35,7 @@ class SyncStreamsCommand extends Command
             $frequency = Setting::syncFrequencyMinutes();
 
             if ($lastSync) {
-                $lastSyncTime = Carbon::parse($lastSync);
-                $nextAllowed = $lastSyncTime->addMinutes($frequency);
+                $nextAllowed = Carbon::parse($lastSync)->startOfMinute()->addMinutes($frequency);
 
                 if (now()->lt($nextAllowed)) {
                     $this->line('Skipping — next sync allowed at '.$nextAllowed->format('H:i:s'));

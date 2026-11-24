@@ -502,3 +502,94 @@ test('deliver tries every message and then reports the refusal', function () {
         ->toThrow(DeliveryFailed::class, 'ntfy answered with HTTP 403 (forbidden).');
     Http::assertSentCount(2);
 });
+
+// Notification options: click action, attachment, action buttons
+
+function ruleWithTemplate(string $channel, array $template): AlertRule
+{
+    return AlertRule::factory()->{'with'.$channel}()->create(['notification_template' => ['version' => 2, ...$template]]);
+}
+
+test('ntfy uses a custom click link with URL-encoded fields, the chosen attachment and action buttons', function () {
+    Http::fake();
+    destination('ntfy', ['server_url' => 'https://ntfy.example.com', 'topic' => 'topic']);
+    $rule = ruleWithTemplate('Ntfy', [
+        'click' => 'custom',
+        'click_url' => [['type' => 'text', 'value' => 'https://example.com/search?q='], ['type' => 'field', 'field' => 'title']],
+        'attachment' => 'avatar',
+        'actions' => [
+            ['label' => [['type' => 'text', 'value' => 'Chat with '], ['type' => 'field', 'field' => 'streamer_name']],
+                'url' => [['type' => 'text', 'value' => 'https://www.twitch.tv/popout/'], ['type' => 'field', 'field' => 'streamer_login'], ['type' => 'text', 'value' => '/chat']]],
+            ['label' => [['type' => 'text', 'value' => 'Channel']], 'url' => [['type' => 'field', 'field' => 'url']]],
+        ],
+    ]);
+    $stream = Stream::factory()->create([
+        'user_login' => 'zoë_fan', 'user_name' => 'Zoë', 'title' => 'Ranked & chill',
+        'profile_image_url' => 'https://static-cdn.jtvnw.net/jtv_user_pictures/zoe-profile_image-300x300.png',
+    ]);
+
+    app(AlertService::class)->sendNotifications([['rule' => $rule, 'stream' => $stream]]);
+
+    Http::assertSent(function ($request) {
+        $actions = json_decode($request->header('Actions')[0], true);
+
+        return $request->header('Click')[0] === 'https://example.com/search?q=Ranked%20%26%20chill'
+            && $request->header('Attach')[0] === 'https://static-cdn.jtvnw.net/jtv_user_pictures/zoe-profile_image-300x300.png'
+            && $request->header('Filename')[0] === 'avatar.png'
+            && mb_check_encoding($request->header('Actions')[0], 'ASCII')
+            && $actions === [
+                ['action' => 'view', 'label' => 'Chat with Zoë', 'url' => 'https://www.twitch.tv/popout/zo%C3%AB_fan/chat'],
+                // Not a valid Twitch login, so the Twitch URL is Twitch's home page.
+                ['action' => 'view', 'label' => 'Channel', 'url' => 'https://www.twitch.tv/'],
+            ];
+    });
+});
+
+test('ntfy sends no Click, Attach or Actions header when the rule turns them off', function () {
+    Http::fake();
+    destination('ntfy', ['server_url' => 'https://ntfy.example.com', 'topic' => 'topic']);
+    $rule = ruleWithTemplate('Ntfy', ['click' => 'none', 'attachment' => 'none']);
+
+    app(AlertService::class)->sendNotifications([['rule' => $rule, 'stream' => Stream::factory()->create()]]);
+
+    Http::assertSent(fn ($request) => ! $request->hasHeader('Click') && ! $request->hasHeader('Attach') && ! $request->hasHeader('Actions'));
+});
+
+test('an action button whose label comes out empty is left out', function () {
+    Http::fake();
+    destination('ntfy', ['server_url' => 'https://ntfy.example.com', 'topic' => 'topic']);
+    $rule = ruleWithTemplate('Ntfy', ['actions' => [
+        ['label' => [['type' => 'text', 'value' => 'Fine']], 'url' => [['type' => 'text', 'value' => 'https://example.com']]],
+        ['label' => [['type' => 'field', 'field' => 'tags']], 'url' => [['type' => 'text', 'value' => 'https://example.com/tags']]],
+    ]]);
+
+    app(AlertService::class)->sendNotifications([['rule' => $rule, 'stream' => Stream::factory()->create(['tags' => null])]]);
+
+    Http::assertSent(fn ($request) => json_decode($request->header('Actions')[0], true) === [
+        ['action' => 'view', 'label' => 'Fine', 'url' => 'https://example.com'],
+    ]);
+});
+
+test('Discord leaves out the link when clicking does nothing and shows the chosen attachment', function () {
+    Http::fake();
+    destination('discord', [], ['webhook_url' => 'https://discord.com/api/webhooks/test']);
+    $rule = ruleWithTemplate('Discord', ['click' => 'none', 'attachment' => 'box_art']);
+    $stream = Stream::factory()->create(['game_box_art_url' => 'https://static-cdn.jtvnw.net/ttv-boxart/1_IGDB-{width}x{height}.jpg']);
+
+    app(AlertService::class)->sendNotifications([['rule' => $rule, 'stream' => $stream]]);
+
+    Http::assertSent(fn ($request) => ! isset($request['embeds'][0]['url'])
+        && ! isset($request['embeds'][0]['author']['url'])
+        && $request['embeds'][0]['image']['url'] === 'https://static-cdn.jtvnw.net/ttv-boxart/1_IGDB-188x250.jpg'
+        && ! isset($request['embeds'][0]['thumbnail']));
+});
+
+test('Telegram sends a text message when the rule attaches nothing', function () {
+    Http::fake();
+    destination('telegram', ['chat_id' => '12345'], ['bot_token' => '123456:ABCDEFGHIJKLMNOP']);
+    $rule = ruleWithTemplate('Telegram', ['attachment' => 'none']);
+
+    app(AlertService::class)->sendNotifications([['rule' => $rule, 'stream' => Stream::factory()->create()]]);
+
+    Http::assertSent(fn ($request) => str_ends_with($request->url(), '/sendMessage'));
+});

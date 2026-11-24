@@ -214,24 +214,29 @@ class AlertService
         $embeds = [];
         foreach (AlertPresenter::group($alerts) as $entry) {
             $p = AlertPresenter::details($entry['stream'], 188, 250);
+            $notification = $this->presenter->options($entry);
             $headline = AlertPresenter::headline($entry['stream']);
 
             $embed = [
                 'title' => $headline,
-                'url' => $p['url'],
                 'color' => Brand::colorInt(),
-                'author' => ['name' => $headline, 'url' => $p['url']],
+                'author' => ['name' => $headline],
                 'timestamp' => now()->toIso8601String(),
                 'description' => $this->presenter->message($entry, 'discord'),
             ];
 
+            if ($notification['click'] !== null) {
+                $embed['url'] = $notification['click'];
+                $embed['author']['url'] = $notification['click'];
+            }
             if ($p['avatar']) {
                 $embed['author']['icon_url'] = $p['avatar'];
             }
-            if ($p['thumbnail']) {
-                $embed['image'] = ['url' => $p['thumbnail']];
+            if ($image = AlertPresenter::attachment($p, $notification['attachment'])) {
+                $embed['image'] = ['url' => $image];
             }
-            if ($p['category_box_art']) {
+            // The box art is the small corner image, unless it already is the big one.
+            if ($p['category_box_art'] && $notification['attachment'] !== 'box_art') {
                 $embed['thumbnail'] = ['url' => $p['category_box_art']];
             }
 
@@ -273,7 +278,7 @@ class AlertService
         $policy = ['allowed_hosts' => ['api.telegram.org'], 'require_https' => true];
 
         $this->eachMessage(AlertPresenter::group($alerts), function (array $entry) use ($apiBase, $chatId, $policy) {
-            $thumbnail = AlertPresenter::details($entry['stream'], 188, 250)['thumbnail'];
+            $thumbnail = AlertPresenter::attachment(AlertPresenter::details($entry['stream'], 188, 250), $this->presenter->options($entry)['attachment']);
 
             $caption = '<b>'.htmlspecialchars(AlertPresenter::headline($entry['stream']), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')."</b>\n"
                 .$this->presenter->message($entry, 'telegram');
@@ -359,9 +364,9 @@ class AlertService
     // ── ntfy ─────────────────────────────────────────────────────────────
 
     /**
-     * One plain-text message per stream, with title, click action, preview
-     * image and avatar. An access token is sent as a Bearer header, a user
-     * name and password as Basic authentication.
+     * One plain-text message per stream, with title, avatar, and the rule's
+     * click action, attachment and action buttons. An access token is sent
+     * as a Bearer header, a user name and password as Basic authentication.
      */
     private function sendNtfy(NotificationDestination $destination, array $alerts): void
     {
@@ -378,26 +383,54 @@ class AlertService
 
         $this->eachMessage(AlertPresenter::group($alerts), function (array $entry) use ($url, $prefix, $options) {
             $p = AlertPresenter::details($entry['stream'], 188, 250);
+            $notification = $this->presenter->options($entry);
             $title = trim($prefix.' '.AlertPresenter::headline($entry['stream']));
 
             $headers = [
                 'Title' => '=?UTF-8?B?'.base64_encode($title).'?=',
             ];
 
-            // Never put a value with whitespace or control characters into a header.
-            if ($p['url'] !== '' && ! preg_match('/\s/', $p['url']) && ! Text::hasControlChars($p['url'])) {
-                $headers['Click'] = $p['url'];
+            // Never put a value with whitespace or control characters into a
+            // header (links from the presenter are checked already).
+            if ($notification['click'] !== null && ! preg_match('/\s/', $notification['click']) && ! Text::hasControlChars($notification['click'])) {
+                $headers['Click'] = $notification['click'];
             }
-            if ($p['thumbnail']) {
-                $headers['Attach'] = $p['thumbnail'].'?t='.time();
-                $headers['Filename'] = 'preview.jpg';
+            if ($attach = AlertPresenter::attachment($p, $notification['attachment'])) {
+                [$headers['Attach'], $headers['Filename']] = self::ntfyAttachment($attach, $notification['attachment']);
             }
             if ($p['avatar']) {
                 $headers['Icon'] = $p['avatar'];
             }
+            if ($notification['actions'] !== []) {
+                // The JSON form of the header; json_encode() escapes every
+                // non-ASCII and control character, so the value is plain ASCII.
+                $headers['Actions'] = json_encode(array_map(fn (array $action) => [
+                    'action' => 'view',
+                    'label' => $action['label'],
+                    'url' => $action['url'],
+                ], $notification['actions']), JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+            }
 
             self::ensureSuccessful($this->http->send('POST', $url, $this->presenter->message($entry, 'plain'), $headers, $options), 'ntfy');
         });
+    }
+
+    /**
+     * The Attach URL and file name of an image. The stream preview gets a
+     * cache-busting query, since Twitch keeps its URL while the picture changes.
+     *
+     * @return array{string, string}
+     */
+    private static function ntfyAttachment(string $url, string $kind): array
+    {
+        if ($kind === 'preview') {
+            return [$url.'?t='.time(), 'preview.jpg'];
+        }
+
+        $extension = strtolower(pathinfo((string) parse_url($url, PHP_URL_PATH), PATHINFO_EXTENSION));
+        $extension = in_array($extension, ['png', 'jpg', 'jpeg', 'gif', 'webp'], true) ? $extension : 'jpg';
+
+        return [$url, ($kind === 'avatar' ? 'avatar' : 'box-art').'.'.$extension];
     }
 
     // ── Email ────────────────────────────────────────────────────────────

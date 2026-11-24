@@ -99,4 +99,38 @@ class AlertPresenter
             return $this->renderer->render(null, $entry['stream'], $entry, $channel);
         }
     }
+
+    /**
+     * Click link, attachment and action buttons of an entry from group();
+     * the defaults (open the stream, preview image, no buttons) when the
+     * stored template is invalid.
+     *
+     * @param  array{stream: Stream, rules: string[], template: ?array}  $entry
+     * @return array{click: ?string, attachment: string, actions: array<int, array{label: string, url: string}>}
+     */
+    public function options(array $entry): array
+    {
+        try {
+            return $this->renderer->options($entry['template'], $entry['stream'], $entry);
+        } catch (Throwable) {
+            // message() already logs an invalid template.
+            return $this->renderer->options(null, $entry['stream'], $entry);
+        }
+    }
+
+    /**
+     * The image a rule attaches, from details(): the stream preview, the
+     * streamer's avatar, the category's box art, or none.
+     *
+     * @param  array{avatar: ?string, thumbnail: ?string, category_box_art: ?string}  $details
+     */
+    public static function attachment(array $details, string $attachment): ?string
+    {
+        return match ($attachment) {
+            'avatar' => $details['avatar'],
+            'box_art' => $details['category_box_art'],
+            'none' => null,
+            default => $details['thumbnail'],
+        };
+    }
 }

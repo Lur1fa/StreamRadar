@@ -4,7 +4,7 @@ import { ChevronDown, X, AlertTriangle } from 'lucide-vue-next';
 import AlertTemplateBuilder from '@/components/AlertTemplateBuilder.vue';
 import { useChipInput } from '@/composables/useChipInput';
 import { destinationChannels, distinctTags } from '@/utils';
-import type { AlertRuleFields, Category, DestinationType, DestinationTypeInfo } from '@/types';
+import type { AlertRuleFields, AlertTemplateBlock, AlertTemplateFields, Category, DestinationType, DestinationTypeInfo } from '@/types';
 
 /**
  * The "Notify me via … when … in …" form of an alert rule, for creating
@@ -12,15 +12,17 @@ import type { AlertRuleFields, Category, DestinationType, DestinationTypeInfo } 
  * given Inertia form and emits `submit` once the form is ready to send.
  */
 const props = defineProps<{
-    form: AlertRuleFields & { processing: boolean };
+    form: AlertRuleFields & { processing: boolean; errors: Partial<Record<string, string>> };
     variant: 'create' | 'edit';
     categories: Category[];
     /** The server's destination types (DestinationType::forBrowser()). */
     types: DestinationTypeInfo[];
     /** Types the account has a working destination for. */
     readyTypes: DestinationType[];
-    /** Template field labels (AlertTemplateValidator::FIELD_LABELS). */
-    templateFields: Record<string, string>;
+    /** Template fields with label, description and sample value (AlertController::templateProps()). */
+    templateFields: AlertTemplateFields;
+    /** The built-in message as blocks. */
+    templateDefaultMessage: AlertTemplateBlock[];
 }>();
 
 const emit = defineEmits<{ submit: []; cancel: [] }>();
@@ -169,13 +171,15 @@ const choice = (on: boolean) => ['inline-flex px-2.5 py-1 rounded-full text-xs f
             </div>
         </div>
 
+        <!-- Notification -->
+        <AlertTemplateBuilder v-model="form.notification_template" :fields="templateFields" :default-message="templateDefaultMessage"
+            :errors="form.errors as Record<string, string>" :field-bg="fieldBg" />
+
         <!-- Name -->
         <div :class="['flex flex-wrap items-center gap-2 border-t dark:border-zinc-800', isEdit ? 'pt-3 border-gray-200' : 'pt-2 border-gray-100']">
             <span class="text-xs text-gray-400 dark:text-zinc-500">Alert name <span v-if="!isEdit" class="text-gray-300 dark:text-zinc-600">optional</span></span>
             <input v-model="form.name" type="text" :placeholder="isEdit ? undefined : autoName" :class="[field, 'flex-1 placeholder:text-gray-400 dark:placeholder:text-zinc-500']" />
         </div>
-
-        <AlertTemplateBuilder v-model="form.notification_template" :fields="templateFields" />
 
         <!-- Warnings -->
         <div v-if="warnings.length" class="space-y-1.5">

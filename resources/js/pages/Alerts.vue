@@ -7,7 +7,8 @@ import ConfirmModal from '@/components/ConfirmModal.vue';
 import AlertRuleForm from '@/components/AlertRuleForm.vue';
 import { useNow } from '@/composables/useNow';
 import { destinationChannels, relativeTime } from '@/utils';
-import type { AlertRule, AlertRuleFields, Category, DestinationType, DestinationTypeInfo, NotifyKey } from '@/types';
+import { fromState, toState } from '@/utils/alertTemplate';
+import type { AlertRule, AlertRuleFields, AlertTemplateBlock, AlertTemplateFields, Category, DestinationType, DestinationTypeInfo, NotifyKey } from '@/types';
 
 const props = defineProps<{
     alertRules: AlertRule[];
@@ -16,8 +17,10 @@ const props = defineProps<{
     readyTypes: DestinationType[];
     /** The server's destination types (DestinationType::forBrowser()). */
     destinationTypes: DestinationTypeInfo[];
-    /** Template field labels (AlertTemplateValidator::FIELD_LABELS). */
-    templateFields: Record<string, string>;
+    /** Template fields with label, description and sample value (AlertController::templateProps()). */
+    templateFields: AlertTemplateFields;
+    /** The built-in message as blocks (AlertTemplateValidator::DEFAULT_MESSAGE). */
+    templateDefaultMessage: AlertTemplateBlock[];
 }>();
 
 // A rule goes to every enabled destination of each type it has switched on (Settings → Notifications).
@@ -71,7 +74,8 @@ function startEdit(rule: AlertRule) {
         ...flags(t => !!rule[t.flag]),
         notify_on_category_change: rule.notify_on_category_change,
         notify_on_stream_start: rule.notify_on_stream_start,
-        notification_template: rule.notification_template ? { version: 1, blocks: [...rule.notification_template.blocks] } : null,
+        // A copy in the current format (older rules may still have a version 1 template).
+        notification_template: fromState(toState(rule.notification_template, props.templateDefaultMessage), props.templateDefaultMessage),
     });
     editForm.clearErrors();
     editingId.value = rule.id;
@@ -108,7 +112,7 @@ function formatTime(dateStr: string): string {
         <Transition enter-active-class="transition ease-out duration-200" enter-from-class="opacity-0 -translate-y-2" enter-to-class="opacity-100 translate-y-0"
             leave-active-class="transition ease-in duration-150" leave-from-class="opacity-100" leave-to-class="opacity-0 -translate-y-2">
             <div v-if="showForm" class="mb-6 bg-white dark:bg-zinc-900 rounded-xl shadow-sm dark:shadow-none overflow-hidden p-5">
-                <AlertRuleForm :form="form" variant="create" :categories="categories" :types="destinationTypes" :ready-types="readyTypes" :template-fields="templateFields" @submit="submit" />
+                <AlertRuleForm :form="form" variant="create" :categories="categories" :types="destinationTypes" :ready-types="readyTypes" :template-fields="templateFields" :template-default-message="templateDefaultMessage" @submit="submit" />
             </div>
         </Transition>
 
@@ -172,7 +176,7 @@ function formatTime(dateStr: string): string {
 
                 <!-- ── Edit Panel (sentence style) ─────────────────── -->
                 <div v-if="editingId === rule.id" class="p-5 bg-gray-50 dark:bg-zinc-950/50 border-t border-gray-100 dark:border-zinc-800">
-                    <AlertRuleForm :form="editForm" variant="edit" :categories="categories" :types="destinationTypes" :ready-types="readyTypes" :template-fields="templateFields"
+                    <AlertRuleForm :form="editForm" variant="edit" :categories="categories" :types="destinationTypes" :ready-types="readyTypes" :template-fields="templateFields" :template-default-message="templateDefaultMessage"
                         @submit="saveEdit(rule)" @cancel="editingId = null" />
                 </div>
             </div>

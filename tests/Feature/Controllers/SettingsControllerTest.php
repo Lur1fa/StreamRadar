@@ -128,7 +128,9 @@ test('POST /settings/import round-trips an export including alert templates', fu
 
     $rule = AlertRule::where('name', 'Round trip')->firstOrFail();
     expect($rule->category_id)->toBe($category->id)
-        ->and($rule->notification_template['blocks'][0]['field'])->toBe('title');
+        // A version 1 template comes back in the current format.
+        ->and($rule->notification_template['version'])->toBe(2)
+        ->and($rule->notification_template['message'][0]['field'])->toBe('title');
 });
 
 test('POST /settings/import rejects invalid JSON', function () {

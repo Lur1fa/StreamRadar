@@ -8,9 +8,11 @@ use App\Models\NotificationDestination;
 use App\Models\TrackedChannel;
 use App\Models\User;
 use App\Services\AlertService;
+use App\Services\AlertTemplateRenderer;
 use App\Services\AlertTemplateValidator;
 use App\Services\Mail\SmtpSettings;
 use App\Services\Notifications\DestinationType;
+use App\Services\Notifications\SampleAlerts;
 use App\Services\TwitchUserLookup;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -45,8 +47,31 @@ class AlertController extends Controller
             'categories' => $categories,
             'readyTypes' => $readyTypes,
             'destinationTypes' => DestinationType::forBrowser(),
-            'templateFields' => AlertTemplateValidator::FIELD_LABELS,
+            ...self::templateProps(),
         ]);
+    }
+
+    /**
+     * What the notification editor needs: every template field with its
+     * label, description and the value it has for a sample stream, and the
+     * built-in message as blocks.
+     *
+     * @return array{templateFields: array<string, array{label: string, description: string, sample: string}>, templateDefaultMessage: array}
+     */
+    private static function templateProps(): array
+    {
+        $sample = SampleAlerts::preview();
+        $values = app(AlertTemplateRenderer::class)->values($sample['stream'], ['rules' => [$sample['rule']->name]]);
+
+        $fields = [];
+        foreach (AlertTemplateValidator::fields() as $field => $info) {
+            $fields[$field] = [...$info, 'sample' => $values[$field] ?? ''];
+        }
+
+        return [
+            'templateFields' => $fields,
+            'templateDefaultMessage' => AlertTemplateValidator::DEFAULT_MESSAGE,
+        ];
     }
 
     public function store(Request $request, AlertService $alertService, TwitchUserLookup $lookup): RedirectResponse

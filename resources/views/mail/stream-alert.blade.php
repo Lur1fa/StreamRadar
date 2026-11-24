@@ -30,8 +30,8 @@
         </div>
         <div style="padding: 16px;">
             <p style="margin: 0 0 12px; font-size: 15px; font-weight: 600; color: #111827;">{{ $entry['title'] }}</p>
-            @if ($entry['thumbnail'])
-                <a href="{{ $entry['url'] }}" style="display: block; margin-bottom: 12px;"><img src="{{ $entry['thumbnail'] }}" width="100%" style="border-radius: 8px; display: block;" alt="Stream preview" /></a>
+            @if ($entry['image'])
+                <a href="{{ $entry['url'] }}" style="display: block; margin-bottom: 12px;"><img src="{{ $entry['image'] }}" width="{{ $entry['image_width'] }}" style="border-radius: 8px; display: block;" alt="" /></a>
             @endif
             <div style="white-space: pre-wrap; margin: 0 0 12px; color: #374151; font-size: 14px;">{{ $entry['message'] }}</div>
             <table cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 12px;">

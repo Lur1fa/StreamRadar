@@ -43,6 +43,32 @@ class SampleAlerts
     }
 
     /**
+     * The fixed sample the template editor previews with. No Twitch lookup.
+     *
+     * @return array{rule: AlertRule, stream: Stream}
+     */
+    public static function preview(): array
+    {
+        $s = self::STREAMS[2];
+
+        return [
+            'rule' => new AlertRule(['name' => $s['rule']]),
+            'stream' => new Stream([
+                'twitch_id' => 'preview-'.$s['user_login'],
+                'user_login' => $s['user_login'],
+                'user_name' => $s['user_name'],
+                'title' => $s['title'],
+                'viewer_count' => $s['viewers'],
+                'language' => $s['language'],
+                'game_name' => $s['game'],
+                'tags' => ['English', 'Esports'],
+                'is_mature' => false,
+                'started_at' => now()->subMinutes(42)->startOfMinute(),
+            ]),
+        ];
+    }
+
+    /**
      * @param  string[]  $logins
      * @return array<string, string|null>
      */

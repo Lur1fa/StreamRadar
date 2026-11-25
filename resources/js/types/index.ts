@@ -91,7 +91,7 @@ export interface AlertRule {
     notify_ntfy: boolean;
     notify_on_category_change: boolean;
     notify_on_stream_start: boolean;
-    notification_template: AlertNotificationTemplate | null;
+    notification_template: AlertNotificationTemplate | LegacyAlertNotificationTemplate | null;
     is_active: boolean;
     latest_tracking: { triggered_at: string } | null;
     created_at: string;
@@ -103,7 +103,38 @@ export type AlertTemplateBlock =
 
 export type AlertTemplateField = 'streamer_name' | 'streamer_login' | 'title' | 'category' | 'viewers' | 'language' | 'url' | 'alert_names' | 'tags' | 'started_at';
 
+/** A template field as the token picker shows it (AlertController::templateProps()). */
+export interface AlertTemplateFieldInfo {
+    label: string;
+    description: string;
+    /** The value for the sample stream the editor previews with. */
+    sample: string;
+}
+
+export type AlertTemplateFields = Record<AlertTemplateField, AlertTemplateFieldInfo>;
+
+export type AlertClickAction = 'stream' | 'none' | 'custom';
+export type AlertAttachment = 'preview' | 'avatar' | 'box_art' | 'none';
+
+/** An ntfy action button that opens a link. */
+export interface AlertTemplateAction {
+    label: AlertTemplateBlock[];
+    url: AlertTemplateBlock[];
+}
+
+/** A rule's notification template (AlertTemplateValidator). */
 export interface AlertNotificationTemplate {
+    version: 2;
+    /** null: the built-in message. */
+    message: AlertTemplateBlock[] | null;
+    click: AlertClickAction;
+    click_url: AlertTemplateBlock[] | null;
+    attachment: AlertAttachment;
+    actions: AlertTemplateAction[];
+}
+
+/** A template stored before version 2: the message only. */
+export interface LegacyAlertNotificationTemplate {
     version: 1;
     blocks: AlertTemplateBlock[];
 }

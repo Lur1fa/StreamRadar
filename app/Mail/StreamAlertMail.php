@@ -65,13 +65,20 @@ class StreamAlertMail extends Mailable
     {
         $presenter = app(AlertPresenter::class);
 
-        return array_map(fn (array $entry) => [
-            ...AlertPresenter::details($entry['stream'], 36, 48),
-            'user_name' => (string) $entry['stream']->user_name,
-            'title' => (string) $entry['stream']->title,
-            'rules' => implode(', ', $entry['rules']),
-            'message' => $presenter->message($entry, 'plain'),
-        ], AlertPresenter::group($this->alerts));
+        return array_map(function (array $entry) use ($presenter) {
+            $attachment = $presenter->options($entry)['attachment'];
+
+            return [
+                ...AlertPresenter::details($entry['stream'], 36, 48),
+                'user_name' => (string) $entry['stream']->user_name,
+                'title' => (string) $entry['stream']->title,
+                'rules' => implode(', ', $entry['rules']),
+                'message' => $presenter->message($entry, 'plain'),
+                // The big image: full width for the stream preview, smaller for an avatar or box art.
+                'image' => AlertPresenter::attachment(AlertPresenter::details($entry['stream'], 188, 250), $attachment),
+                'image_width' => $attachment === 'preview' ? '100%' : '160',
+            ];
+        }, AlertPresenter::group($this->alerts));
     }
 
     /** Strip CR/LF and other control characters so a title can never inject headers. */

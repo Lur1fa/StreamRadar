@@ -143,6 +143,55 @@ test('GET /alerts ships the destination types and template fields from the serve
     $this->get('/alerts')->assertInertia(fn ($page) => $page
         ->has('destinationTypes', count(DestinationType::cases()))
         ->where('destinationTypes.0.flag', 'notify_ntfy')
-        ->where('templateFields.url', 'Twitch URL')
+        ->where('templateFields.url.label', 'Twitch URL')
+        ->where('templateFields.streamer_login.sample', 'caedrel')
+        ->where('templateFields.viewers.sample', '55,210')
+        ->where('templateDefaultMessage.0', ['type' => 'field', 'field' => 'title'])
     );
+});
+
+test('POST /alerts stores a notification template with click link, attachment and action buttons', function () {
+    $this->post('/alerts', [
+        'name' => 'With buttons',
+        'notification_template' => [
+            'version' => 2,
+            'message' => [['type' => 'field', 'field' => 'streamer_name'], ['type' => 'text', 'value' => ' is live']],
+            'click' => 'custom',
+            'click_url' => [['type' => 'text', 'value' => 'https://example.com/'], ['type' => 'field', 'field' => 'streamer_login']],
+            'attachment' => 'avatar',
+            'actions' => [[
+                'label' => [['type' => 'text', 'value' => 'Chat']],
+                'url' => [['type' => 'text', 'value' => 'https://www.twitch.tv/popout/'], ['type' => 'field', 'field' => 'streamer_login'], ['type' => 'text', 'value' => '/chat']],
+            ]],
+        ],
+    ])->assertRedirect()->assertSessionHasNoErrors();
+
+    expect(AlertRule::where('name', 'With buttons')->first()->notification_template)
+        ->click->toBe('custom')
+        ->attachment->toBe('avatar')
+        ->actions->toHaveCount(1);
+});
+
+test('POST /alerts rejects an action button whose link is not http(s)', function () {
+    $this->post('/alerts', [
+        'name' => 'Bad button',
+        'notification_template' => [
+            'version' => 2,
+            'actions' => [['label' => [['type' => 'text', 'value' => 'Run']], 'url' => [['type' => 'text', 'value' => 'javascript:alert(1)']]]],
+        ],
+    ])->assertSessionHasErrors('notification_template.actions.0.url');
+
+    expect(AlertRule::where('name', 'Bad button')->exists())->toBeFalse();
+});
+
+test('spaces and line breaks around template text are kept', function () {
+    $this->postJson('/alerts', [
+        'name' => 'Spacing',
+        'notification_template' => [
+            'version' => 2,
+            'message' => [['type' => 'field', 'field' => 'streamer_name'], ['type' => 'text', 'value' => " is live\n "], ['type' => 'field', 'field' => 'title']],
+        ],
+    ]);
+
+    expect(AlertRule::where('name', 'Spacing')->first()->notification_template['message'][1]['value'])->toBe(" is live\n ");
 });

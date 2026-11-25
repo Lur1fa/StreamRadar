@@ -20,6 +20,10 @@ return Application::configure(basePath: dirname(__DIR__))
             \App\Http\Middleware\HandleInertiaRequests::class,
         ]);
 
+        // Spaces and line breaks around the text of a notification template
+        // are part of the message.
+        $middleware->trimStrings(except: ['notification_template.*']);
+
         // Invalidate every other session of a user when their password changes.
         $middleware->authenticateSessions();
 

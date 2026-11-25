@@ -265,6 +265,26 @@ test('sync updates last_sync_at setting', function () {
     expect(Setting::get('last_sync_at'))->not->toBeNull();
 });
 
+test('sync records when the scan started, not when it ended', function () {
+    $twitch = $this->mock(TwitchApiService::class);
+    $this->mock(TwitchTrackerService::class);
+    Category::factory()->create();
+    $this->travelTo(now()->parse('2026-11-19T12:00:00+00:00'));
+
+    // The scan takes 20 seconds; that must not delay the next one.
+    $twitch->shouldReceive('getAllStreamsForCategory')->andReturnUsing(function () {
+        $this->travel(20)->seconds();
+
+        return [];
+    });
+    $twitch->shouldReceive('getStreamsByUsers')->andReturn([]);
+    $twitch->shouldReceive('getUsersByIds')->andReturn([]);
+
+    app(SyncService::class)->sync();
+
+    expect(Setting::get('last_sync_at'))->toBe('2026-11-19T12:00:00+00:00');
+});
+
 test('sync returns SyncResult DTO', function () {
     $twitch = $this->mock(TwitchApiService::class);
     $this->mock(TwitchTrackerService::class);

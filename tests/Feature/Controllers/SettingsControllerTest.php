@@ -35,6 +35,20 @@ test('PUT /settings saves settings', function () {
     expect(getAccountSetting('theme'))->toBe('dark');
 });
 
+test('users can set their own history retention period', function () {
+    $alice = regularUser();
+    $bob = regularUser();
+
+    $this->actingAs($alice)->put('/settings', ['history_retention_days' => 30])
+        ->assertRedirect()->assertSessionHasNoErrors();
+
+    expect(getAccountSetting('history_retention_days', '0', $alice))->toBe('30')
+        ->and(getAccountSetting('history_retention_days', '0', $bob))->toBe('0');
+
+    $this->from('/settings')->put('/settings', ['history_retention_days' => 14])
+        ->assertSessionHasErrors('history_retention_days');
+});
+
 test('PUT /settings normalises booleans and validates numbers', function () {
     $this->put('/settings', ['auto_sync_enabled' => false, 'sync_frequency_minutes' => 15])->assertRedirect()->assertSessionHasNoErrors();
 

@@ -55,6 +55,7 @@ class UpdateSettingsRequest extends FormRequest
             'global_languages' => ['nullable', 'json', 'max:2000'],
             'global_keywords' => ['nullable', 'json', 'max:5000'],
             'theme' => ['nullable', 'in:light,dark,system'],
+            'history_retention_days' => ['nullable', 'integer', 'in:0,7,30,90,365'],
             'smtp_host' => ['nullable', 'string', 'max:255', 'regex:/^[A-Za-z0-9.\-]+$/'],
             'smtp_port' => ['nullable', 'integer', 'between:1,65535'],
             'smtp_username' => ['nullable', 'string', 'max:255'],

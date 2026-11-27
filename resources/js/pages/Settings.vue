@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { useForm, router, Link } from '@inertiajs/vue3';
-import { Key, RefreshCw, Filter, Mail, Palette, X, Plus, Bell, Lock, Download, Upload } from 'lucide-vue-next';
+import { Key, RefreshCw, Filter, Mail, X, Plus, Bell, Lock, Download, Upload } from 'lucide-vue-next';
 import AppLayout from '@/layouts/AppLayout.vue';
 import NotificationDestinations from '@/components/NotificationDestinations.vue';
 import FieldError from '@/components/FieldError.vue';
 import SecretHint from '@/components/SecretHint.vue';
-import { useTheme } from '@/composables/useTheme';
 import { useAuth } from '@/composables/useAuth';
 import { useChipInput } from '@/composables/useChipInput';
 import { parseJson, requestErrorMessage } from '@/utils';
@@ -22,7 +21,6 @@ const props = defineProps<{
     /** Installation settings: administrators only (Setting::SERVER_KEYS). */
     serverKeys: string[];
 }>();
-const { theme: currentTheme, setTheme } = useTheme();
 const { isAdmin } = useAuth();
 
 // Settings of the installation (Twitch keys, scanning, SMTP server) are shared
@@ -42,7 +40,6 @@ const form = useForm({
     global_min_avg_viewers: value('global_min_avg_viewers'),
     global_languages: value('global_languages'),
     global_keywords: value('global_keywords'),
-    theme: value('theme'),
     smtp_host: value('smtp_host'),
     smtp_port: value('smtp_port'),
     smtp_username: value('smtp_username'),
@@ -89,7 +86,7 @@ const FIELD_LABELS: Record<string, string> = {
     twitch_client_id: 'Twitch Client ID', twitch_client_secret: 'Twitch Client Secret',
     auto_sync_enabled: 'Auto scanning', sync_frequency_minutes: 'Scan frequency',
     global_min_viewers: 'Min viewers', global_min_avg_viewers: 'Min avg viewers',
-    global_languages: 'Languages', global_keywords: 'Keywords', theme: 'Theme',
+    global_languages: 'Languages', global_keywords: 'Keywords',
     smtp_host: 'SMTP host', smtp_port: 'SMTP port',
     smtp_username: 'SMTP username', smtp_password: 'SMTP password', smtp_encryption: 'SMTP encryption',
     mail_from_address: 'From address', mail_from_name: 'From name',
@@ -109,7 +106,6 @@ function saveSettings() {
     syncLists();
     form.put('/settings', {
         preserveScroll: true,
-        onSuccess: () => { if (form.theme !== currentTheme.value) setTheme(form.theme as any); },
         onError: () => { scrollToFirstError(); },
     });
 }
@@ -180,7 +176,6 @@ const sections = [
     { id: 'mail', label: 'Mail Server', icon: Mail, adminOnly: true },
     { id: 'auth', label: 'Access', icon: Lock, adminOnly: true },
     { id: 'backup', label: 'Backup', icon: Download, adminOnly: true },
-    { id: 'appearance', label: 'Appearance', icon: Palette },
 ].filter((section) => !section.adminOnly || isAdmin.value);
 
 function scrollTo(id: string) {
@@ -478,24 +473,6 @@ onMounted(() => {
                             <Upload class="w-4 h-4" /> Import
                         </button>
                         <input ref="importFileInput" type="file" accept=".json" class="hidden" @change="handleImport" />
-                    </div>
-                </div>
-
-                <!-- Appearance -->
-                <div id="section-appearance" class="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm dark:shadow-none scroll-mt-24">
-                    <div class="flex items-center gap-2 mb-4">
-                        <Palette class="w-5 h-5 text-purple-500" />
-                        <h3 class="text-lg font-bold text-gray-900 dark:text-white">Appearance</h3>
-                    </div>
-                    <div class="flex gap-3">
-                        <button v-for="opt in [{ value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }, { value: 'system', label: 'System' }]"
-                            :key="opt.value" @click="form.theme = opt.value"
-                            :class="['px-4 py-2 text-sm font-medium rounded-lg transition-colors',
-                                form.theme === opt.value
-                                    ? 'bg-purple-50 text-purple-700 dark:bg-purple-500/10 dark:text-purple-300'
-                                    : 'bg-gray-50 dark:bg-zinc-800 text-gray-600 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-700']">
-                            {{ opt.label }}
-                        </button>
                     </div>
                 </div>
 

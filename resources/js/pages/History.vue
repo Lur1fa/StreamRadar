@@ -9,7 +9,11 @@ import { useDebouncedFn } from '@/composables/useDebouncedFn';
 import { relativeTime, twitchCategoryUrl, twitchChannelUrl } from '@/utils';
 import type { HistoryEvent, PaginatedData } from '@/types';
 
-const props = defineProps<{ events: PaginatedData<HistoryEvent>; filters: { type: string | null; search: string | null } }>();
+const props = defineProps<{
+    events: PaginatedData<HistoryEvent>;
+    filters: { type: string | null; search: string | null };
+    historyRetentionDays: number;
+}>();
 const searchInput = ref(props.filters.search || '');
 
 /** Reload the list with these filters; empty ones are left out of the URL. */
@@ -32,6 +36,15 @@ function filterByType(type: string | null) {
 
 const showClearConfirm = ref(false);
 function clearHistory() { router.delete('/history', { preserveScroll: true, onSuccess: () => { showClearConfirm.value = false; } }); }
+
+const savingRetention = ref(false);
+function updateRetention(event: Event) {
+    savingRetention.value = true;
+    router.put('/settings', { history_retention_days: (event.target as HTMLSelectElement).value }, {
+        preserveScroll: true,
+        onFinish: () => { savingRetention.value = false; },
+    });
+}
 
 const now = useNow();
 
@@ -65,10 +78,21 @@ const types = Object.keys(typeConfig);
     <AppLayout>
         <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
             <h2 class="text-xl font-bold text-gray-900 dark:text-white">History</h2>
-            <button v-if="events.total > 0" @click="showClearConfirm = true"
-                class="px-3 py-1.5 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors flex items-center gap-1.5">
-                <Trash2 class="w-4 h-4" /> Clear All
-            </button>
+            <div class="flex items-center gap-3">
+                <label for="history-retention" class="text-xs text-gray-500 dark:text-zinc-400">Keep history:</label>
+                <select id="history-retention" :value="historyRetentionDays" :disabled="savingRetention" @change="updateRetention"
+                    class="px-2.5 py-1.5 text-xs rounded-lg bg-white dark:bg-zinc-900 text-gray-700 dark:text-zinc-300 outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50">
+                    <option :value="0">Forever</option>
+                    <option :value="7">7 days</option>
+                    <option :value="30">30 days</option>
+                    <option :value="90">90 days</option>
+                    <option :value="365">1 year</option>
+                </select>
+                <button v-if="events.total > 0" @click="showClearConfirm = true"
+                    class="px-3 py-1.5 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors flex items-center gap-1.5">
+                    <Trash2 class="w-4 h-4" /> Clear All
+                </button>
+            </div>
         </div>
 
         <div class="flex flex-col sm:flex-row gap-3 mb-6">

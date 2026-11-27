@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Models\HistoryEvent;
+use App\Models\Setting;
+use App\Models\UserSetting;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -12,7 +14,10 @@ class HistoryController extends Controller
 {
     public function index(Request $request): Response
     {
-        $query = HistoryEvent::ownedBy($request->user())->orderByDesc('created_at');
+        $user = $request->user();
+        HistoryEvent::pruneExpiredFor($user);
+        $retentionDays = (int) UserSetting::get($user, 'history_retention_days', Setting::DEFAULTS['history_retention_days']);
+        $query = HistoryEvent::ownedBy($user)->orderByDesc('created_at');
 
         if ($request->filled('type')) {
             $query->ofType($request->input('type'));
@@ -36,6 +41,7 @@ class HistoryController extends Controller
                 'type' => $request->input('type'),
                 'search' => $request->input('search'),
             ],
+            'historyRetentionDays' => $retentionDays,
         ]);
     }
 

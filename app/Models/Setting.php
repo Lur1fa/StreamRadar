@@ -59,8 +59,8 @@ class Setting extends Model
 
     /**
      * Settings every account has for itself (stored in UserSetting): default
-     * filters and appearance. Where its alerts go is a list of
-     * NotificationDestination records.
+     * filters, appearance and history retention. Where its alerts go is a list
+     * of NotificationDestination records.
      */
     public const ACCOUNT_KEYS = [
         'global_min_viewers',
@@ -68,6 +68,7 @@ class Setting extends Model
         'global_languages',
         'global_keywords',
         'theme',
+        'history_retention_days',
     ];
 
     /** Everything the Settings page can read or write. */
@@ -88,6 +89,7 @@ class Setting extends Model
         'global_languages' => '[]',
         'global_keywords' => '[]',
         'theme' => 'system',
+        'history_retention_days' => '0',
     ];
 
     public static function isAccountKey(string $key): bool

@@ -48,6 +48,21 @@ class HistoryEvent extends Model
         static::creating(function (HistoryEvent $event) {
             $event->created_at ??= now();
         });
+
+        static::created(function (HistoryEvent $event) {
+            static::pruneExpiredFor((int) $event->owner_id);
+        });
+    }
+
+    /** Delete this account's history events older than its retention period. */
+    public static function pruneExpiredFor(User|int $owner): void
+    {
+        $days = (int) UserSetting::get($owner, 'history_retention_days', Setting::DEFAULTS['history_retention_days']);
+        if ($days <= 0) {
+            return;
+        }
+
+        static::ownedBy($owner)->where('created_at', '<', now()->subDays($days))->delete();
     }
 
     public function scopeOfType(Builder $query, string $type): Builder
